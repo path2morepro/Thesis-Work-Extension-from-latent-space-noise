@@ -324,23 +324,23 @@ def spatial_correlation_diagnostics(field,
 
     return results
 
-sqg = SQGData('SQG.npy', 'inverted_SQG.npy')
-noise0 = sqg.get_field()
+# sqg = SQGData()
+# noise0 = sqg.get_field()
 
 
-results = spatial_correlation_diagnostics(noise0, 
-                                          average_frames=10, 
-                                          blocks=(2,2), 
-                                          n_angles=8, 
-                                          r_max=None, 
-                                          show_plots=True)
+# results = spatial_correlation_diagnostics(noise0, 
+#                                           average_frames=10, 
+#                                           blocks=(2,2), 
+#                                           n_angles=8, 
+#                                           r_max=None, 
+#                                           show_plots=True)
 
 
-results_local = spatial_correlation_diagnostics(noise0,
-    average_frames=10,
-    use_local_standardize=True,
-    show_plots=True
-)
+# results_local = spatial_correlation_diagnostics(noise0,
+#     average_frames=10,
+#     use_local_standardize=True,
+#     show_plots=True
+# )
 
 
 
@@ -471,16 +471,16 @@ def spatial_correlation_local_report(field,
     return results
 
 
-# 强烈建议：局部标准化以削弱漂移
-local_res = spatial_correlation_local_report(
-    noise0,
-    average_frames=10,
-    blocks=(2,2),              # 可改 (3,3) / (4,4) 看空间分辨率需要
-    use_local_standardize=True,
-    n_angles=8,
-    r_max=None,
-    show_plots=True
-)
+# # 强烈建议：局部标准化以削弱漂移
+# local_res = spatial_correlation_local_report(
+#     noise0,
+#     average_frames=10,
+#     blocks=(2,2),              # 可改 (3,3) / (4,4) 看空间分辨率需要
+#     use_local_standardize=True,
+#     n_angles=8,
+#     r_max=None,
+#     show_plots=True
+# )
 
 # 以上成功证明像素之间线性不相关
 
@@ -941,58 +941,58 @@ def hsic_blockwise(field,
     return results
 
 
-noise0 = torch.as_tensor(noise0, dtype=DTYPE)  # (T, 64, 64)
-# ---------- 1) 全局 HSIC ----------
-hsic_map, hsic_r = hsic_map_rbf_torch(
-    noise0,
-    max_shift=15,
-    average_frames=10,
-    radial=True,
-    max_samples=3000,
-    spatial_stride=2,
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    per_frame_standardize=True,     # 每帧标准化 (optional)
-    show_progress=True
-)
+# noise0 = torch.as_tensor(noise0, dtype=DTYPE)  # (T, 64, 64)
+# # ---------- 1) 全局 HSIC ----------
+# hsic_map, hsic_r = hsic_map_rbf_torch(
+#     noise0,
+#     max_shift=15,
+#     average_frames=10,
+#     radial=True,
+#     max_samples=3000,
+#     spatial_stride=2,
+#     device="cuda" if torch.cuda.is_available() else "cpu",
+#     per_frame_standardize=True,     # 每帧标准化 (optional)
+#     show_progress=True
+# )
 
-xi_global = nonlinear_corr_length_from_hsic(hsic_r)
-print(f"Global nonlinear correlation length ξ_nl ≈ {xi_global}")
+# xi_global = nonlinear_corr_length_from_hsic(hsic_r)
+# print(f"Global nonlinear correlation length ξ_nl ≈ {xi_global}")
 
-# --- 可视化 ---
-plt.figure(figsize=(5, 5))
-plt.imshow(hsic_map, cmap="viridis", origin="lower")
-plt.colorbar(label="HSIC value")
-plt.title("Global HSIC map (RBF kernel)")
-plt.tight_layout()
-plt.show()
+# # --- 可视化 ---
+# plt.figure(figsize=(5, 5))
+# plt.imshow(hsic_map, cmap="viridis", origin="lower")
+# plt.colorbar(label="HSIC value")
+# plt.title("Global HSIC map (RBF kernel)")
+# plt.tight_layout()
+# plt.show()
 
-# 使用你写好的函数绘制径向曲线
-plot_hsic_radials([hsic_r], labels=["Global field"], normalize="first_band", smooth=5)
-plt.show()
+# # 使用你写好的函数绘制径向曲线
+# plot_hsic_radials([hsic_r], labels=["Global field"], normalize="first_band", smooth=5)
+# plt.show()
 
 
-# ---------- 2) 分块 HSIC ----------
-results = hsic_blockwise(
-    noise0,
-    blocks=(2, 2),                  # 2x2 blocks
-    max_shift=15,
-    average_frames=10,
-    radial=True,
-    max_samples=3000,
-    spatial_stride=2,
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    per_frame_standardize=True,
-    show_progress=False
-)
+# # ---------- 2) 分块 HSIC ----------
+# results = hsic_blockwise(
+#     noise0,
+#     blocks=(2, 2),                  # 2x2 blocks
+#     max_shift=15,
+#     average_frames=10,
+#     radial=True,
+#     max_samples=3000,
+#     spatial_stride=2,
+#     device="cuda" if torch.cuda.is_available() else "cpu",
+#     per_frame_standardize=True,
+#     show_progress=False
+# )
 
-# 提取径向曲线与 block 标签
-radials = [b["radial"] for b in results["per_block"]]
-labels = [f"block {b['block_index']} (ξ={b['xi_nl']})" for b in results["per_block"]]
+# # 提取径向曲线与 block 标签
+# radials = [b["radial"] for b in results["per_block"]]
+# labels = [f"block {b['block_index']} (ξ={b['xi_nl']})" for b in results["per_block"]]
 
-# --- 使用同一个绘图函数绘制多条径向曲线 ---
-plot_hsic_radials(radials, labels=labels, normalize="first_band", smooth=5)
-plt.title("Block-wise HSIC radial curves")
-plt.show()
+# # --- 使用同一个绘图函数绘制多条径向曲线 ---
+# plot_hsic_radials(radials, labels=labels, normalize="first_band", smooth=5)
+# plt.title("Block-wise HSIC radial curves")
+# plt.show()
 
 
 
