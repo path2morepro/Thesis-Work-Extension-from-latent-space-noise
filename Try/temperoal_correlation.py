@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Dict, List, Optional
 from data import SQGData
 
-def rolling_mean_1d(arr: np.ndarray, window: int) -> np.ndarray:
+def rolling_mean_1d(arr, window) :
     """Centered moving average with reflect padding."""
     if window <= 1:
         return arr.astype(np.float64, copy=True)
@@ -18,11 +18,11 @@ def rolling_mean_1d(arr: np.ndarray, window: int) -> np.ndarray:
     out = np.convolve(padv, ker, mode="valid")
     return out
 
-def temporal_detrend_per_pixel(field: np.ndarray, window: int = 7) -> np.ndarray:
+def temporal_detrend_per_pixel(field, window) :
     """Detrend each pixel over time by subtracting a moving average.
     field: (T, X, Y)
     """
-    T, X, Y = field.shape
+    _, X, Y = field.shape
     out = np.empty_like(field, dtype=np.float64)
     for i in range(X):
         for j in range(Y):
@@ -31,7 +31,7 @@ def temporal_detrend_per_pixel(field: np.ndarray, window: int = 7) -> np.ndarray
             out[:, i, j] = series - trend
     return out
 
-def acf_1d(x: np.ndarray, max_lag: int) -> np.ndarray:
+def acf_1d(x, max_lag):
     """Biased ACF normalized to 1 at lag 0. Returns shape (max_lag+1,)"""
     x = np.asarray(x, dtype=np.float64)
     x = x - x.mean()
@@ -43,7 +43,7 @@ def acf_1d(x: np.ndarray, max_lag: int) -> np.ndarray:
     ac = ac[mid: mid + max_lag + 1] / (len(x) * var)
     return ac
 
-def block_slices(X: int, Y: int, blocks: Tuple[int, int]) -> List[Tuple[slice, slice]]:
+def block_slices(X, Y, blocks):
     bx, by = blocks
     xs = np.linspace(0, X, bx + 1, dtype=int)
     ys = np.linspace(0, Y, by + 1, dtype=int)
@@ -53,32 +53,8 @@ def block_slices(X: int, Y: int, blocks: Tuple[int, int]) -> List[Tuple[slice, s
             regions.append((slice(xs[i], xs[i+1]), slice(ys[j], ys[j+1])))
     return regions
 
-def _circular_block_bootstrap_1d(y: np.ndarray, L: int, B: int) -> np.ndarray:
-    """Return bootstrap resamples as a 2D array (B, T) using circular block bootstrap.
-    y shape: (T,)
-    """
-    y = np.asarray(y, dtype=np.float64)
-    T = len(y)
-    if T == 0:
-        return np.empty((B, 0), dtype=np.float64)
-    if L <= 1:
-        # ordinary bootstrap on indices (less ideal for time series but fallback)
-        idx = np.random.randint(0, T, size=(B, T))
-        return y[idx]
-    # wrap for circular indexing
-    y_wrap = np.concatenate([y, y[:L-1]])
-    n_blocks = int(np.ceil(T / L))
-    out = np.empty((B, T), dtype=np.float64)
-    for b in range(B):
-        pieces = []
-        for _ in range(n_blocks):
-            start = np.random.randint(0, T)  # start anywhere
-            pieces.append(y_wrap[start:start+L])
-        boot = np.concatenate(pieces)[:T]
-        out[b] = boot
-    return out
 
-def _pairwise_acf_similarity(acf_blocks: np.ndarray, drop_lag0: bool=True) -> Tuple[np.ndarray, np.ndarray]:
+def _pairwise_acf_similarity(acf_blocks, drop_lag0):
     """Compute pairwise shape distances/correlations between block ACF curves.
     Distance is 1 - Pearson correlation on centered ACF vectors (scale-invariant).
     Returns:
@@ -103,7 +79,7 @@ def _pairwise_acf_similarity(acf_blocks: np.ndarray, drop_lag0: bool=True) -> Tu
     return np.array(dists, dtype=np.float64), np.array(cors, dtype=np.float64)
 
 
-def _circular_block_indices(T: int, L: int) -> np.ndarray:
+def _circular_block_indices(T, L):
     """Build a length-T index array by concatenating circular blocks of length L."""
     if L <= 1:
         return np.random.randint(0, T, size=T)
@@ -117,7 +93,7 @@ def _circular_block_indices(T: int, L: int) -> np.ndarray:
     idx = np.concatenate(blocks)[:T]
     return idx
 
-def _default_block_len(T: int, acf_global: np.ndarray) -> int:
+def _default_block_len(T, acf_global) :
     """Choose a conservative default block length.
     Lower bounded at 8 to avoid overshort blocks that destroy low-frequency shape.
     """
@@ -131,17 +107,7 @@ def _default_block_len(T: int, acf_global: np.ndarray) -> int:
     return L
 
 
-def temporal_stationarity_diagnostics(
-    field: np.ndarray,
-    max_lag: int = 50,
-    blocks: Tuple[int, int] = (2, 2),
-    thresholds: Optional[Dict[str, float]] = None,
-    # Bootstrap options
-    do_bootstrap: bool = True,
-    B: int = 1000,
-    block_len: Optional[int] = None,
-    ci_level: float = 0.95,
-) -> Dict[str, object]:
+def temporal_stationarity_diagnostics(field, max_lag, blocks, thresholds, do_bootstrap, B, block_len, ci_level):
     """
     Diagnose temporal WSS (Wide-Sense Stationarity) and homogeneity of temporal correlation across subspaces.
     Uses:

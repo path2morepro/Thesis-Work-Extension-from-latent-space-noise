@@ -1,4 +1,3 @@
-# 那就先给数据读出来再做分析
 import os
 import numpy as np
 from natsort import natsorted
