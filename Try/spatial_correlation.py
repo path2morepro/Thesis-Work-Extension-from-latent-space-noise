@@ -170,20 +170,7 @@ def _spectrum_and_kappa(frames, smooth_sigma=1.5):
     kappa = (lam_max / (lam_min + 1e-12))
     return S, Ssm, kappa
 
-def spatial_correlation_diagnostics(field,
-                                    average_frames=10,
-                                    blocks=(2,2),
-                                    n_angles=8,
-                                    r_max=None,
-                                    use_local_standardize=False,
-                                    show_plots=True,
-                                    thresholds=dict(
-                                        mu_abs_max=0.1,      # |μ_k| ≤ 0.1
-                                        std_ratio_max=1.5,   # max std / min std ≤ 1.5
-                                        delta_median_max=0.05,# 分块ACF形状差异
-                                        D_median_max=0.02,   # 方向性ACF离散度
-                                        kappa_max=1.3        # 结构张量特征值比
-                                    )):
+def spatial_correlation_diagnostics(field, average_frames, blocks, n_angles, r_max, use_local_standardize, show_plots, thresholds):
     """
     基于 2D ACF + 径向平均 的“诊断—决策”实现（第一版核心）。
     输入
