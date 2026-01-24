@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import correlate2d
-from data import SQGData
 from scipy.ndimage import gaussian_filter
 
 def _detrend_and_standardize(frames, local=False, local_sigma=0):
@@ -280,41 +279,26 @@ def spatial_correlation_diagnostics(field,
     )
 
     if show_plots:
-        fig, axs = plt.subplots(2, 3, figsize=(14, 8))
-        # 2D ACF
-        im0 = axs[0,0].imshow(acf2d, cmap='RdBu_r', origin='lower')
-        axs[0,0].set_title("2D ACF (normalized)")
-        plt.colorbar(im0, ax=axs[0,0], fraction=0.046, pad=0.04)
-
-        # Radial
-        axs[0,1].plot(radial, lw=1.5)
-        axs[0,1].axhline(np.exp(-1), ls='--')
-        if corr_len is not None:
-            axs[0,1].axvline(corr_len, ls='--')
-        axs[0,1].set_title("Radial ACF")
-        axs[0,1].set_xlabel("r (px)")
-        axs[0,1].set_ylabel("C(r)")
+        # Only keep directional ACFs, smoothed spectrum, and WSS stats
+        fig, axs = plt.subplots(1, 3, figsize=(14, 4))
 
         # Directional profiles (r in [r_lo, r_hi))
         for m in range(dir_profiles.shape[0]):
-            axs[0,2].plot(np.arange(r_lo, r_hi), dir_profiles[m, r_lo:r_hi], alpha=0.8)
-        axs[0,2].set_title(f"Directional ACFs (n={n_angles})")
-        axs[0,2].set_xlabel("r (px)")
-        axs[0,2].set_ylabel("C(r)")
+            axs[0].plot(np.arange(r_lo, r_hi), dir_profiles[m, r_lo:r_hi], alpha=0.8)
+        axs[0].set_title(f" ACFs (n={n_angles})")
+        axs[0].set_xlabel("r (px)")
+        axs[0].set_ylabel("C(r)")
 
-        # Periodogram
-        im1 = axs[1,0].imshow(np.log1p(S), cmap='magma', origin='lower')
-        axs[1,0].set_title("Periodogram log(1+S)")
-        plt.colorbar(im1, ax=axs[1,0], fraction=0.046, pad=0.04)
-        im2 = axs[1,1].imshow(np.log1p(Ssm), cmap='magma', origin='lower')
-        axs[1,1].set_title(f"Smoothed Spectrum (κ={results['kappa']:.2f})")
-        plt.colorbar(im2, ax=axs[1,1], fraction=0.046, pad=0.04)
+        # Smoothed spectrum
+        im2 = axs[1].imshow(np.log1p(Ssm), cmap='magma', origin='lower')
+        axs[1].set_title(f"Smoothed Spectrum (κ={results['kappa']:.2f})")
+        plt.colorbar(im2, ax=axs[1], fraction=0.046, pad=0.04)
 
         # WSS block stats
-        axs[1,2].bar(np.arange(len(mu_k))-0.2, mu_k, width=0.4, label='μ_k')
-        axs[1,2].bar(np.arange(len(mu_k))+0.2, std_k, width=0.4, label='σ_k')
-        axs[1,2].set_title(f"WSS blocks: std_ratio={std_ratio:.2f}, Δ_med={delta_median:.3f}")
-        axs[1,2].legend()
+        axs[2].bar(np.arange(len(mu_k))-0.2, mu_k, width=0.4, label='μ_k')
+        axs[2].bar(np.arange(len(mu_k))+0.2, std_k, width=0.4, label='σ_k')
+        axs[2].set_title(f"WSS blocks: std_ratio={std_ratio:.2f}, Δ_med={delta_median:.3f}")
+        axs[2].legend()
 
         plt.tight_layout()
         plt.show()
@@ -324,675 +308,77 @@ def spatial_correlation_diagnostics(field,
 
     return results
 
-# sqg = SQGData()
-# noise0 = sqg.get_field()
+
+def calibrate_thresholds(
+    n_rep=200,
+    average_frames=10,
+    H=64, W=64,
+    blocks=(2, 2),
+    n_angles=8,
+    q=0.95,
+    seed=0,
+):
+    rng = np.random.default_rng(seed)
+
+    # preallocate
+    max_mu = np.empty(n_rep)
+    std_ratio = np.empty(n_rep)
+    delta_med = np.empty(n_rep)
+    D_med = np.empty(n_rep)
+    kappa = np.empty(n_rep)
+
+    for i in range(n_rep):
+        # only generate what you use
+        white_noise = rng.standard_normal((average_frames, H, W))
+
+        baseline = spatial_correlation_diagnostics(
+            white_noise,
+            average_frames=average_frames,  # function will average these frames
+            blocks=blocks,
+            n_angles=n_angles,
+            r_max=None,
+            show_plots=False
+        )
+
+        max_mu[i] = np.max(np.abs(baseline["block_means"]))
+        std_ratio[i] = baseline["std_ratio"]
+        delta_med[i] = baseline["block_acf_shape_delta_median"]
+        D_med[i] = baseline["directional_dispersion_median"]
+        kappa[i] = baseline["kappa"]
+
+    thresholds = {
+        "mu_abs_max": np.quantile(max_mu, q),
+        "std_ratio_max": np.quantile(std_ratio, q),
+        "delta_median_max": np.quantile(delta_med, q),
+        "D_median_max": np.quantile(D_med, q),
+        "kappa_max": np.quantile(kappa, q),
+    }
+    return thresholds
+
+# 生成阈值
+# thresholds = calibrate_thresholds(n_rep=100, q=0.99, seed=42)
+# print(thresholds)
 
 
-# results = spatial_correlation_diagnostics(noise0, 
-#                                           average_frames=10, 
-#                                           blocks=(2,2), 
-#                                           n_angles=8, 
-#                                           r_max=None, 
-#                                           show_plots=True)
+# 调用示例
+# results = spatial_correlation_diagnostics(noise0, average_frames=10, blocks=(2,2), n_angles=8, r_max=None, show_plots=True, thresholds=thresholds)
+# 和阈值比较的几个指标
+# print(results['block_means'])
+# print(results['std_ratio'])
+# print(results['block_acf_shape_delta_median'])
+# print(results['directional_dispersion_median'])
+# print(results['kappa'])
 
-
+# 进一步诊断
 # results_local = spatial_correlation_diagnostics(noise0,
 #     average_frames=10,
 #     use_local_standardize=True,
-#     show_plots=True
+#     show_plots=True,
+#     thresholds=thresholds
 # )
 
-
-
-def _spectrum_kappa(img, smooth_sigma=1.5):
-    F = img - img.mean()
-    S = np.abs(np.fft.fftshift(np.fft.fft2(F)))**2
-    if smooth_sigma and smooth_sigma > 0:
-        Ssm = gaussian_filter(S, sigma=smooth_sigma)
-    else:
-        Ssm = S
-    X, Y = Ssm.shape
-    fy = np.linspace(-1, 1, X); fx = np.linspace(-1, 1, Y)
-    FY, FX = np.meshgrid(fy, fx, indexing='ij')
-    Mxx = np.sum((FX**2) * Ssm); Myy = np.sum((FY**2) * Ssm); Mxy = np.sum((FX*FY) * Ssm)
-    evals = np.linalg.eigvalsh(np.array([[Mxx, Mxy],[Mxy, Myy]]))
-    lam_min, lam_max = evals[0], evals[-1]
-    kappa = lam_max / (lam_min + 1e-12)
-    return S, Ssm, float(kappa)
-
-def spatial_correlation_local_report(field,
-                                     average_frames=10,
-                                     blocks=(2,2),
-                                     use_local_standardize=True,
-                                     n_angles=8,
-                                     r_max=None,
-                                     show_plots=True):
-    """
-    对每个子块计算：2D ACF、径向ACF、相关长度 xi、方向离散度 D_k、谱椭圆率 kappa_k。
-    产出：xi 热力图、分块径向曲线面板、分块谱图面板（可选）。
-    """
-    T, X, Y = field.shape
-    K = min(average_frames, T)
-    frames0 = field[:K].astype(np.float64)
-    frames = _detrend_and_standardize(frames0, local=use_local_standardize)
-
-    # 平均帧（更稳）：频域/展示
-    mean_img = frames.mean(axis=0)
-
-    # 分块
-    regions = _subblocks_indices(X, Y, blocks)
-    bx, by = blocks
-    nb = len(regions)
-
-    # 每块计算
-    xi_map = np.full((bx, by), np.nan, dtype=float)
-    D_list, kappa_map = np.full((bx, by), np.nan), np.full((bx, by), np.nan)
-    radials = []    # 保存每块的径向曲线
-    acf2ds = []     # 如需展示
-    spectra = []    # 如需展示
-
-    for idx, (sx, sy) in enumerate(regions):
-        bi, bj = divmod(idx, by)
-        # 用每帧的该子块，做 ACF 平均
-        acf2d = np.zeros((2*(sx.stop - sx.start)-1, 2*(sy.stop - sy.start)-1), dtype=np.float64)
-        for t in range(K):
-            acf2d += _acf2d(frames[t, sx, sy])
-        acf2d /= K
-        acf2ds.append(acf2d)
-
-        # 径向 + xi
-        radial = _radial_average(acf2d, r_max=r_max)
-        radials.append(radial)
-        xi = int(np.argmax(radial < np.exp(-1))) if np.any(radial < np.exp(-1)) else np.nan
-        xi_map[bi, bj] = xi
-
-        # 方向离散度（各向同性的局部证据）
-        prof = _directional_profiles(acf2d, n_angles=n_angles, r_max=(len(radial)-1))
-        R = prof.shape[1]; r_lo, r_hi = max(1, R//12), max(2, R//2)
-        D_r = np.var(prof[:, r_lo:r_hi], axis=0)
-        D_med = float(np.median(D_r))
-        D_list[bi, bj] = D_med
-
-        # 谱椭圆率（方向性频域证据）
-        S, Ssm, kappa = _spectrum_kappa(mean_img[sx, sy], smooth_sigma=1.2)
-        spectra.append(Ssm)
-        kappa_map[bi, bj] = kappa
-
-    results = dict(
-        blocks=blocks,
-        xi_map=xi_map,
-        D_map=D_list,
-        kappa_map=kappa_map,
-        radials=radials,
-        acf2ds=acf2ds,
-        spectra=spectra,
-        meta=dict(average_frames=K, n_angles=n_angles, use_local_standardize=use_local_standardize)
-    )
-
-    if show_plots:
-        # 1) 相关长度热力图
-        fig, ax = plt.subplots(1, 3, figsize=(14,4))
-        im0 = ax[0].imshow(xi_map, cmap='viridis', origin='lower')
-        ax[0].set_title("Local correlation length ξ (pixels)")
-        plt.colorbar(im0, ax=ax[0], fraction=0.046, pad=0.04)
-
-        im1 = ax[1].imshow(D_list, cmap='magma', origin='lower')
-        ax[1].set_title("Directional dispersion D (median over r)")
-        plt.colorbar(im1, ax=ax[1], fraction=0.046, pad=0.04)
-
-        im2 = ax[2].imshow(kappa_map, cmap='cividis', origin='lower', vmin=1.0)
-        ax[2].set_title("Spectral anisotropy κ (λ_max/λ_min)")
-        plt.colorbar(im2, ax=ax[2], fraction=0.046, pad=0.04)
-        plt.tight_layout()
-        plt.show()
-
-        # 2) 分块径向曲线面板
-        rows, cols = blocks
-        fig, axs = plt.subplots(rows, cols, figsize=(4*cols, 3*rows), squeeze=False)
-        for idx, radial in enumerate(radials):
-            r = np.arange(len(radial))
-            i, j = divmod(idx, cols)
-            axs[i,j].plot(r, radial, lw=1.5)
-            axs[i,j].axhline(np.exp(-1), ls='--', alpha=0.6)
-            xi = xi_map[i, j]
-            if np.isfinite(xi):
-                axs[i,j].axvline(int(xi), ls='--', alpha=0.6)
-            axs[i,j].set_title(f"Block ({i+1},{j+1})  ξ≈{xi_map[i,j]:.0f}, D≈{D_list[i,j]:.3f}, κ≈{kappa_map[i,j]:.2f}")
-            axs[i,j].set_xlabel("r (px)"); axs[i,j].set_ylabel("C(r)")
-        plt.tight_layout(); plt.show()
-
-    # 简短文字结论（给你复用在报告里）
-    print("—— 局部分析小结 ——")
-    print(f"分块: {blocks}, 帧数用于平均: {K}, 局部标准化: {use_local_standardize}")
-    print(f"ξ（相关长度）范围: [{np.nanmin(xi_map):.0f}, {np.nanmax(xi_map):.0f}] px")
-    print(f"D（方向离散度）中位数: {np.nanmedian(D_list):.3f}（越小越各向同性）")
-    print(f"κ（谱椭圆率）范围: [{np.nanmin(kappa_map):.2f}, {np.nanmax(kappa_map):.2f}]（≈1为圆对称）")
-
-    return results
-
-
-# # 强烈建议：局部标准化以削弱漂移
-# local_res = spatial_correlation_local_report(
-#     noise0,
-#     average_frames=10,
-#     blocks=(2,2),              # 可改 (3,3) / (4,4) 看空间分辨率需要
-#     use_local_standardize=True,
-#     n_angles=8,
-#     r_max=None,
-#     show_plots=True
-# )
-
-# 以上成功证明像素之间线性不相关
-
-# -*- coding: utf-8 -*-
-# Optimized HSIC (RBF kernel) — PyTorch version with caching + robust bandwidth + vectorized radial mean
-
-import numpy as np
-import torch
-from torch import Tensor
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-
-# ==========================
-# Global dtype (configurable)
-# ==========================
-DTYPE = torch.float64  # you can switch to torch.float32 in hsic_map_rbf_torch(..., dtype=torch.float32)
-
-# ==========================
-# Caches
-# ==========================
-_H_CACHE: dict[tuple, Tensor] = {}          # key: (n, dtype, device) -> H
-_GRID_CACHE: dict[tuple, tuple] = {}        # key: (H, W, device) -> (yy, xx, r_long, rmax)
-_SIGMA_CACHE: dict[tuple, Tensor] = {}      # optional: (n, device, dtype, 'x'/'y') -> sigma (if you want to cache computed sigmas)
-
-
-# -----------------------------------------
-# 1) Sampling pairs (unchanged, already OK)
-# -----------------------------------------
-@torch.no_grad()
-def sample_pairs_for_shift_torch(field: Tensor, dx: int, dy: int,
-                                 max_samples: int = 3000, spatial_stride: int = 1,
-                                 generator=None) -> tuple[Tensor, Tensor]:
-    """
-    Sample pixel pairs separated by spatial shift (dx, dy) from a 3D field (T, X, Y).
-    Returns flattened 1D tensors (xvals, yvals). If total pairs > max_samples, random subsample.
-    """
-    T, X, Y = field.shape
-    xs = torch.arange(0, X, spatial_stride, device=field.device)
-    ys = torch.arange(0, Y, spatial_stride, device=field.device)
-
-    a = field[:, xs, :][:, :, ys]  # (T, |xs|, |ys|)
-    b = torch.roll(field, shifts=(0, dx, dy), dims=(0, 1, 2))[:, xs, :][:, :, ys]
-
-    a = a.reshape(-1)
-    b = b.reshape(-1)
-
-    n = a.numel()
-    if n > max_samples:
-        gen = generator or torch.Generator(device=field.device)
-        idx = torch.randperm(n, generator=gen, device=field.device)[:max_samples]
-        a = a[idx]
-        b = b[idx]
-    return a, b
-
-
-# ------------------------------------------------------
-# 2) Vectorized radial mean with cached grid / binning
-# ------------------------------------------------------
-@torch.no_grad()
-def radial_mean_from_map_torch(arr2d: Tensor) -> tuple[Tensor, tuple[int, int]]:
-    """
-    Compute radial mean curve from a 2D map centered at (cx, cy).
-    Uses cached (yy, xx, r) grid and vectorized binning, ignoring NaNs.
-    Returns (radial_mean, (cx, cy)).
-    """
-    Hh, Ww = arr2d.shape
-    cx, cy = Hh // 2, Ww // 2
-    key = (Hh, Ww, arr2d.device)
-
-    # cache (yy, xx, r_long)
-    if key not in _GRID_CACHE:
-        yy, xx = torch.meshgrid(
-            torch.arange(Hh, device=arr2d.device),
-            torch.arange(Ww, device=arr2d.device),
-            indexing="ij"
-        )
-        r = torch.sqrt((yy - cx).to(DTYPE) ** 2 + (xx - cy).to(DTYPE) ** 2)
-        r_long = r.long()
-        rmax = int(r_long.max())
-        _GRID_CACHE[key] = (yy, xx, r_long, rmax)
-    else:
-        yy, xx, r_long, rmax = _GRID_CACHE[key]
-
-    # flatten and ignore NaNs
-    vals = arr2d.reshape(-1)
-    rflat = r_long.reshape(-1)
-    finite_mask = torch.isfinite(vals)
-    if not finite_mask.any():
-        radial = torch.full((int(rflat.max().item()) + 1,), float("nan"), dtype=DTYPE, device=arr2d.device)
-        return radial, (cx, cy)
-
-    vals = vals[finite_mask].to(DTYPE)
-    bins = rflat[finite_mask]
-
-    # sum and count per radius via bincount (vectorized)
-    # NOTE: torch.bincount supports with weights; counts are integer bincount
-    rmax_eff = int(bins.max().item())
-    sums = torch.bincount(bins, weights=vals, minlength=rmax_eff + 1).to(DTYPE)
-    cnts = torch.bincount(bins, minlength=rmax_eff + 1).to(DTYPE)
-
-    # avoid division by zero
-    radial = torch.full((rmax_eff + 1,), float("nan"), dtype=DTYPE, device=arr2d.device)
-    nz = cnts > 0
-    radial[nz] = sums[nz] / cnts[nz]
-    return radial, (cx, cy)
-
-
-# ------------------------------------------------------
-# 3) HSIC with robust bandwidth + optional no-H centering
-# ------------------------------------------------------
-def _get_centering_H(n: int, dtype: torch.dtype, device: torch.device) -> Tensor:
-    """Get (and cache) the centering matrix H = I - 11^T/n of size n."""
-    key = (n, dtype, device)
-    H = _H_CACHE.get(key, None)
-    if H is None:
-        I = torch.eye(n, dtype=dtype, device=device)
-        O = torch.ones((n, n), dtype=dtype, device=device) / n
-        H = I - O
-        _H_CACHE[key] = H
-    return H
-
-
-@torch.no_grad()
-def _center_kernel_mean(K: Tensor) -> Tensor:
-    """
-    Center a Gram matrix without explicit H, using mean subtraction:
-      Kc = K - row_mean - col_mean + grand_mean
-    This is algebraically equivalent to H K H but saves one large matrix alloc.
-    """
-    row_mean = K.mean(dim=1, keepdim=True)
-    col_mean = K.mean(dim=0, keepdim=True)
-    grand_mean = K.mean()
-    Kc = K - row_mean - col_mean + grand_mean
-    return Kc
-
-
-@torch.no_grad()
-def _rbf_gram(vec: Tensor, sigma: Tensor | float | None) -> Tensor:
-    """
-    Construct RBF Gram matrix K with robust bandwidth handling.
-    vec: shape (n,) or (n,1)
-    sigma: if None -> median heuristic; if float/Tensor -> use as bandwidth.
-    """
-    v = vec.view(-1, 1)
-    # pairwise squared Euclidean
-    d2 = torch.cdist(v, v, p=2) ** 2
-
-    if sigma is None:
-        # median heuristic with robust fallback
-        # pick strictly positive distances to avoid zeros on diagonal
-        mask = d2 > 0
-        if mask.any():
-            m = torch.median(d2[mask])
-            if torch.isfinite(m) and (m > 0):
-                s = torch.sqrt(0.5 * m)
-            else:
-                # fallback: use 0.5 * quantile(0.5) if finite, else 1.0
-                q = torch.quantile(d2[mask], 0.5)
-                s = torch.sqrt(0.5 * q) if torch.isfinite(q) and (q > 0) else torch.tensor(1.0, device=v.device, dtype=v.dtype)
-        else:
-            # all distances zero → constant data; degenerate case
-            s = torch.tensor(1.0, device=v.device, dtype=v.dtype)
-    else:
-        s = torch.as_tensor(sigma, device=v.device, dtype=v.dtype)
-
-    K = torch.exp(-d2 / (2 * s ** 2))
-    return K
-
-
-@torch.no_grad()
-def hsic_stat_torch(x: Tensor,
-                    y: Tensor,
-                    sigma_x: float | Tensor | None = None,
-                    sigma_y: float | Tensor | None = None,
-                    use_explicit_H: bool = False,
-                    dtype: torch.dtype | None = None) -> Tensor:
-    """
-    Biased HSIC estimator with options:
-      - robust bandwidth (median heuristic with fallback) unless sigma_* provided
-      - centering without explicitly forming H (default), or with cached H (optional)
-      - configurable dtype
-
-    HSIC_biased = trace(Kc Lc) / (n-1)^2
-    where Kc = H K H or K - rowmean - colmean + grand_mean.
-    """
-    dt = dtype or DTYPE
-    x = x.to(dt)
-    y = y.to(dt)
-    n = x.numel()
-
-    # construct Gram matrices with robust sigma
-    Kx = _rbf_gram(x, sigma_x)
-    Ky = _rbf_gram(y, sigma_y)
-
-    if use_explicit_H:
-        H = _get_centering_H(n, dt, x.device)
-        Kc = H @ Kx @ H
-        Lc = H @ Ky @ H
-    else:
-        Kc = _center_kernel_mean(Kx)
-        Lc = _center_kernel_mean(Ky)
-
-    # trace(Kc Lc) / (n-1)^2
-    HSIC = torch.trace(Kc @ Lc) / ((n - 1) ** 2)
-    return HSIC
-
-
-# ------------------------------------------------------
-# 4) HSIC map with options (dtype, per-frame std, fixed sigma)
-# ------------------------------------------------------
-@torch.no_grad()
-def hsic_map_rbf_torch(field: Tensor,
-                       max_shift: int = 15,
-                       average_frames: int | None = None,
-                       radial: bool = True,
-                       max_samples: int = 3000,
-                       spatial_stride: int = 1,
-                       device: str = "cuda",
-                       seed: int = 0,
-                       show_progress: bool = True,
-                       dtype: torch.dtype | None = None,
-                       per_frame_standardize: bool = False,
-                       sigma_x: float | Tensor | None = None,
-                       sigma_y: float | Tensor | None = None,
-                       use_explicit_H: bool = False):
-    """
-    Compute HSIC map over spatial shifts.
-
-    Parameters (new / key)
-    ----------------------
-    dtype : torch.dtype or None
-        Compute dtype (default uses global DTYPE).
-    per_frame_standardize : bool
-        If True, subtract per-frame mean and divide per-frame std (robust to temporal drift).
-    sigma_x, sigma_y : float/Tensor/None
-        If provided, use fixed bandwidths for RBF on X and Y; otherwise use robust median heuristic.
-    use_explicit_H : bool
-        If True, center with Kc = H K H using cached H; by default use mean-centering (no explicit H).
-
-    Returns
-    -------
-    hsic_map : np.ndarray
-    radial_mean : np.ndarray | None
-    """
-    dt = dtype or DTYPE
-    if not torch.is_tensor(field):
-        field = torch.as_tensor(field, dtype=dt)
-    else:
-        field = field.to(dtype=dt)
-
-    # move to device
-    field = field.to(device)
-
-    gen = torch.Generator(device=device)
-    gen.manual_seed(seed)
-
-    # optional temporal averaging
-    if average_frames is not None:
-        field = field[:average_frames]
-
-    # standardization
-    if per_frame_standardize:
-        # per-frame mean/std: shape (T,1,1)
-        mu = field.mean(dim=(1, 2), keepdim=True)
-        std = field.std(dim=(1, 2), keepdim=True)
-        std = torch.where(std > 0, std, torch.ones_like(std))
-        field = (field - mu) / std
-    else:
-        # global mean-only removal (your original behavior)
-        field = field - field.mean()
-
-    shifts = range(-max_shift, max_shift + 1)
-    size = 2 * max_shift + 1
-    hsic_map = torch.full((size, size), float("nan"), dtype=dt, device=device)
-
-    iterator = tqdm(shifts, desc="HSIC shifts", ncols=90, disable=not show_progress)
-    for i, dx in enumerate(iterator):
-        for j, dy in enumerate(shifts):
-            if dx == 0 and dy == 0:
-                continue
-            xvals, yvals = sample_pairs_for_shift_torch(
-                field, dx, dy, max_samples=max_samples,
-                spatial_stride=spatial_stride, generator=gen
-            )
-            hsic_map[i, j] = hsic_stat_torch(
-                xvals, yvals,
-                sigma_x=sigma_x, sigma_y=sigma_y,
-                use_explicit_H=use_explicit_H,
-                dtype=dt
-            )
-
-    radial_mean = None
-    if radial:
-        radial_mean, _ = radial_mean_from_map_torch(hsic_map)
-
-    # move back to CPU/np for plotting
-    return hsic_map.detach().cpu().numpy(), (None if radial_mean is None else radial_mean.detach().cpu().numpy())
-
-
-# ------------------------------------------------------
-# 5) Nonlinear correlation length + plotting (unchanged)
-# ------------------------------------------------------
-def nonlinear_corr_length_from_hsic(radial_curve: np.ndarray):
-    if radial_curve is None or not np.isfinite(radial_curve).any():
-        return None
-    base = np.nanmean(radial_curve[1:4]) if radial_curve.size > 4 else np.nanmean(radial_curve[1:])
-    # guard base
-    if not np.isfinite(base) or base <= 0:
-        return None
-    thr = 0.05 * base
-    idx = np.where(radial_curve < thr)[0]
-    return int(idx[0]) if idx.size > 0 else None
-
-
-def plot_hsic_radials(radials,
-                      labels=None,
-                      normalize="first_band",
-                      xlim=None,
-                      ylim=None,
-                      title="HSIC radial curves (block-wise)",
-                      figsize=(6, 4),
-                      smooth=None):
-    """
-    Plot radial HSIC curves explicitly (e.g., one curve per block).
-    """
-    if labels is None:
-        labels = [f"block {k}" for k in range(len(radials))]
-
-    def _ma(arr, w):
-        if w is None or w < 3:
-            return arr
-        w = int(w)
-        if w % 2 == 0:
-            w += 1
-        pad = w // 2
-        padv = np.pad(arr, (pad, pad), mode="edge")
-        ker = np.ones(w, dtype=float) / w
-        return np.convolve(padv, ker, mode="valid")
-
-    def _normalize(arr):
-        if arr is None or not np.isfinite(arr).any():
-            return arr
-        if normalize == "none":
-            return arr
-        if normalize == "max":
-            m = np.nanmax(arr)
-            return arr / m if np.isfinite(m) and m != 0 else arr
-        if normalize == "first_band":
-            if arr.size > 4:
-                base = np.nanmean(arr[1:4])
-            else:
-                base = np.nanmean(arr[1:]) if arr.size > 1 else np.nanmean(arr)
-            return arr / base if np.isfinite(base) and base != 0 else arr
-        return arr
-
-    fig, ax = plt.subplots(figsize=figsize)
-    for r, lab in zip(radials, labels):
-        rr = r
-        if rr is None:
-            continue
-        rr = _normalize(rr)
-        rr = _ma(rr, smooth)
-        ax.plot(rr, label=lab)
-
-    ax.set_xlabel("radius r (pixels)")
-    ax.set_ylabel("HSIC (normalized)" if normalize != "none" else "HSIC")
-    ax.set_title(title)
-    if xlim is not None:
-        ax.set_xlim(*xlim)
-    if ylim is not None:
-        ax.set_ylim(*ylim)
-    if labels is not None:
-        ax.legend()
-    ax.grid(True, alpha=0.3)
-    return fig, ax
-
-
-# ------------------------------------------------------
-# 6) Block-wise HSIC (compatible; passes options through)
-# ------------------------------------------------------
-def hsic_blockwise(field,
-                   blocks=(2, 2),
-                   max_shift=15,
-                   average_frames=None,
-                   radial=True,
-                   max_samples=3000,
-                   spatial_stride=1,
-                   device=None,
-                   seed=0,
-                   show_progress=False,
-                   dtype: torch.dtype | None = None,
-                   per_frame_standardize: bool = False,
-                   sigma_x: float | Tensor | None = None,
-                   sigma_y: float | Tensor | None = None,
-                   use_explicit_H: bool = False):
-    """
-    Compute HSIC maps and radial curves per spatial block (locally stationary assumption).
-    New options are forwarded to hsic_map_rbf_torch for consistency.
-    """
-    # resolve device
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # ensure tensor
-    dt = dtype or DTYPE
-    if not torch.is_tensor(field):
-        field_t = torch.as_tensor(field, dtype=dt)
-    else:
-        field_t = field.to(dtype=dt)
-
-    if field_t.ndim != 3:
-        raise ValueError("`field` must be a 3D array / tensor with shape (T, X, Y).")
-    T, X, Y = field_t.shape
-
-    # reuse your subblocks indexer (assumed already defined in your codebase)
-    regions = _subblocks_indices(X, Y, blocks=blocks)
-
-    results = {
-        "blocks": blocks,
-        "per_block": []
-    }
-
-    b = 0
-    for i in range(blocks[0]):
-        for j in range(blocks[1]):
-            xs, ys = regions[b]
-            b += 1
-
-            sub = field_t[:, xs, ys]
-            hsic_map, hsic_r = hsic_map_rbf_torch(
-                sub,
-                max_shift=max_shift,
-                average_frames=average_frames,
-                radial=radial,
-                max_samples=max_samples,
-                spatial_stride=spatial_stride,
-                device=device,
-                show_progress=show_progress,
-                seed=seed,
-                dtype=dt,
-                per_frame_standardize=per_frame_standardize,
-                sigma_x=sigma_x,
-                sigma_y=sigma_y,
-                use_explicit_H=use_explicit_H
-            )
-
-            xi_nl = nonlinear_corr_length_from_hsic(hsic_r)
-
-            results["per_block"].append({
-                "block_index": (i, j),
-                "xslice": xs,
-                "yslice": ys,
-                "hsic_map": hsic_map,
-                "radial": hsic_r,
-                "xi_nl": xi_nl
-            })
-
-    return results
-
-
-# noise0 = torch.as_tensor(noise0, dtype=DTYPE)  # (T, 64, 64)
-# # ---------- 1) 全局 HSIC ----------
-# hsic_map, hsic_r = hsic_map_rbf_torch(
-#     noise0,
-#     max_shift=15,
-#     average_frames=10,
-#     radial=True,
-#     max_samples=3000,
-#     spatial_stride=2,
-#     device="cuda" if torch.cuda.is_available() else "cpu",
-#     per_frame_standardize=True,     # 每帧标准化 (optional)
-#     show_progress=True
-# )
-
-# xi_global = nonlinear_corr_length_from_hsic(hsic_r)
-# print(f"Global nonlinear correlation length ξ_nl ≈ {xi_global}")
-
-# # --- 可视化 ---
-# plt.figure(figsize=(5, 5))
-# plt.imshow(hsic_map, cmap="viridis", origin="lower")
-# plt.colorbar(label="HSIC value")
-# plt.title("Global HSIC map (RBF kernel)")
-# plt.tight_layout()
-# plt.show()
-
-# # 使用你写好的函数绘制径向曲线
-# plot_hsic_radials([hsic_r], labels=["Global field"], normalize="first_band", smooth=5)
-# plt.show()
-
-
-# # ---------- 2) 分块 HSIC ----------
-# results = hsic_blockwise(
-#     noise0,
-#     blocks=(2, 2),                  # 2x2 blocks
-#     max_shift=15,
-#     average_frames=10,
-#     radial=True,
-#     max_samples=3000,
-#     spatial_stride=2,
-#     device="cuda" if torch.cuda.is_available() else "cpu",
-#     per_frame_standardize=True,
-#     show_progress=False
-# )
-
-# # 提取径向曲线与 block 标签
-# radials = [b["radial"] for b in results["per_block"]]
-# labels = [f"block {b['block_index']} (ξ={b['xi_nl']})" for b in results["per_block"]]
-
-# # --- 使用同一个绘图函数绘制多条径向曲线 ---
-# plot_hsic_radials(radials, labels=labels, normalize="first_band", smooth=5)
-# plt.title("Block-wise HSIC radial curves")
-# plt.show()
-
-
-
+# print(results_local['block_means'])
+# print(results_local['std_ratio'])
+# print(results_local['block_acf_shape_delta_median'])
+# print(results_local['directional_dispersion_median'])
+# print(results_local['kappa'])

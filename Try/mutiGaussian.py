@@ -272,7 +272,7 @@ def random_projection_gaussian_test_torch(noise_TXYL: Tensor, level: int = 0, nu
 
 
 # 1) 读取数据（Torch）
-sqg = SQGDataTorch('SQG.npy', 'inverted_SQG.npy', device='cuda')  # 若无 GPU 可省略 device
+sqg = SQGDataTorch('../SQG.npy', '../inverted_SQG.npy', device='cuda')  # 若无 GPU 可省略 device
 
 # 2) 取出一个 level 的时序场 (T, X, Y)
 noise0 = sqg.get_field(dataset='noise', level=0, normalized=False)  # torch.Tensor

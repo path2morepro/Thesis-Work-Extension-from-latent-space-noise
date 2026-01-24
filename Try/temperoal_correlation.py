@@ -129,13 +129,12 @@ def _default_block_len(T: int, acf_global: np.ndarray) -> int:
     L_cube = int(round(T**(1/3)))  # Politis-White heuristic scale
     L = max(8, min(64, max(L_iat, L_cube)))  # clamp to [8, 64]
     return L
+
+
 def temporal_stationarity_diagnostics(
     field: np.ndarray,
     max_lag: int = 50,
     blocks: Tuple[int, int] = (2, 2),
-    detrend: bool = True,
-    trend_window: int = 7,
-    local_standardize: bool = False,
     thresholds: Optional[Dict[str, float]] = None,
     # Bootstrap options
     do_bootstrap: bool = True,
@@ -143,83 +142,78 @@ def temporal_stationarity_diagnostics(
     block_len: Optional[int] = None,
     ci_level: float = 0.95,
 ) -> Dict[str, object]:
-    """Diagnose temporal WSS and homogeneity of temporal correlation across subspaces.
-    Adds normalized ACF distance (1 - corr) and circular block-bootstrap CIs.
-    Returns dict with metrics and (if enabled) CIs.
+    """
+    Diagnose temporal WSS (Wide-Sense Stationarity) and homogeneity of temporal correlation across subspaces.
+    Uses:
+      - A1: stability of frame-wise spatial mean/variance over time
+      - A2: homogeneity of temporal ACF (Autocorrelation Function) shape across blocks
+      - Circular block bootstrap CIs for A2 summary metrics (median pairwise ACF-shape corr/dist)
+
+    Key change vs naive approach:
+      - Use energy-series (second-order) per block and globally to avoid sign cancellation in spatial means.
+      - If do_bootstrap=True, A2 decision is based on bootstrap CI (confidence interval), not just point thresholds.
     """
     if thresholds is None:
         thresholds = dict(
+            # A1 (heuristic tolerances). These are practical cutoffs, not universal statistical constants.
             mu_cv_max=0.1,
             sigma_ratio_max=1.5,
-            # new distance is 1 - corr median (scale/offset invariant)
-            acf_dist_median_max=0.15,   # ~ corr_median >= 0.85
-            acf_corr_median_min=0.85
+            # A2 (shape homogeneity tolerances)
+            # dist = 1 - corr, so dist<=0.15 roughly implies corr>=0.85
+            acf_dist_median_max=0.15,
+            acf_corr_median_min=0.85,
         )
 
     assert field.ndim == 3, "`field` must be (T, X, Y)"
     T, X, Y = field.shape
     F = field.astype(np.float64, copy=False)
 
-    if detrend:
-        F = temporal_detrend_per_pixel(F, window=trend_window)
-
-    if local_standardize:
-        mu_t = F.mean(axis=(1,2), keepdims=True)
-        sd_t = F.std(axis=(1,2), keepdims=True)
-        sd_t[sd_t == 0] = 1.0
-        F = (F - mu_t) / sd_t
-
-    # A1: mean/variance stability
-    mu_t = F.mean(axis=(1,2))
-    sigma_t = F.std(axis=(1,2)) + 1e-12
+    # ---------------- A1: mean/variance stability ----------------
+    mu_t = F.mean(axis=(1, 2))
+    sigma_t = F.std(axis=(1, 2)) + 1e-12
     mu_cv = float(np.std(mu_t) / (np.std(F) + 1e-12))
     sigma_ratio = float(np.max(sigma_t) / max(np.min(sigma_t), 1e-12))
 
-    # global series ACF for visualization
-    global_series = F.mean(axis=(1,2))
+    th = thresholds
+    A1_ok = (mu_cv <= th["mu_cv_max"]) and (sigma_ratio <= th["sigma_ratio_max"])
+
+    # ---------------- Global series for visualization ----------------
+    # Use global "energy series" to avoid sign cancellation of spatial mean.
+    mu_g = F.mean(axis=0, keepdims=True)                      # (1, X, Y) time-mean field
+    global_series = ((F - mu_g) ** 2).mean(axis=(1, 2))       # (T,) per-frame average energy
     acf_global = acf_1d(global_series, max_lag=max_lag)
 
-    # A2: block-wise ACFs
+    # ---------------- A2: block-wise ACFs ----------------
     regs = block_slices(X, Y, blocks)
     acf_blocks = []
     series_blocks = []  # keep for bootstrap
+
     for sx, sy in regs:
-        block_series = F[:, sx, sy].mean(axis=(1,2))
+        block_field = F[:, sx, sy]                              # (T, bx, by)
+        block_mu = block_field.mean(axis=0, keepdims=True)      # (1, bx, by) time-mean field
+        block_series = ((block_field - block_mu) ** 2).mean(axis=(1, 2))  # (T,)
         series_blocks.append(block_series)
         acf_blocks.append(acf_1d(block_series, max_lag=max_lag))
-    acf_blocks = np.stack(acf_blocks, axis=0)  # (B, L+1)
-    Bblocks = acf_blocks.shape[0]
+
+    acf_blocks = np.stack(acf_blocks, axis=0)  # (n_blocks, max_lag+1)
+    n_blocks = acf_blocks.shape[0]
 
     # normalized, scale-invariant distance: 1 - corr on centered curves
     dists, cors = _pairwise_acf_similarity(acf_blocks, drop_lag0=True)
     dist_median = float(np.median(dists)) if dists.size else 0.0
     corr_median = float(np.median(cors)) if cors.size else 1.0
 
-    th = thresholds
-    A1_ok = (mu_cv <= th["mu_cv_max"]) and (sigma_ratio <= th["sigma_ratio_max"])
-    A2_ok = (dist_median <= th["acf_dist_median_max"]) and (corr_median >= th["acf_corr_median_min"])
+    # We'll decide A2 using either point estimate (no bootstrap) or CI (with bootstrap)
+    A2_ok_point = (dist_median <= th["acf_dist_median_max"]) and (corr_median >= th["acf_corr_median_min"])
 
-    if A1_ok and A2_ok:
-        decision = "GLOBAL_TEMPORAL_OK"
-        note = "时间二阶平稳且子空间间的时间相关形状一致；可用全局共享的时间模型。"
-    elif A1_ok and not A2_ok:
-        decision = "LOCAL_TEMPORAL_ONLY"
-        note = "时间近似平稳，但不同子空间的时间相关形状存在差异；建议局部时间模型或空间自适应时间核。"
-    elif (not A1_ok) and A2_ok:
-        decision = "DETREND_OR_VARIANCE_STABILIZE"
-        note = "时间非平稳（均值/方差随 t 变动），但各子空间时间相关形状相似；需更强去趋势/稳定化。"
-    else:
-        decision = "NONSTATIONARY_AND_HETEROGENEOUS"
-        note = "时间非平稳且子空间时间相关不一致；建议局部+分段时间建模。"
-
-    # ---------- Bootstrap CIs ----------
+    # ---------------- Bootstrap CIs for A2 summaries ----------------
     ci = {}
+    A2_status = "POINT_ONLY"  # will become PASS/FAIL/INCONCLUSIVE if do_bootstrap
+    A2_ok = bool(A2_ok_point)
+
     if do_bootstrap:
         # choose block length conservatively
-        if block_len is None:
-            Lb = _default_block_len(T, acf_global)
-        else:
-            Lb = int(block_len)
+        Lb = _default_block_len(T, acf_global) if block_len is None else int(block_len)
 
         Bboot = int(B)
         dist_samples = np.empty(Bboot, dtype=np.float64)
@@ -238,40 +232,79 @@ def temporal_stationarity_diagnostics(
             corr_samples[b] = np.median(c_b) if c_b.size else 1.0
 
         alpha = 1.0 - float(ci_level)
-        lo = 100*alpha/2.0
-        hi = 100*(1.0 - alpha/2.0)
-        ci["acf_dist_median"] = (float(np.percentile(dist_samples, lo)),
-                                 float(np.percentile(dist_samples, hi)))
-        ci["acf_corr_median"] = (float(np.percentile(corr_samples, lo)),
-                                 float(np.percentile(corr_samples, hi)))
-        ci["block_len_used"] = Lb
-        ci["B"] = Bboot
-        ci["level"] = ci_level
-# ---------- Plots (compatible with Matplotlib>=3.8) ----------
-# ---------- Plots (compatible with Matplotlib>=3.8) ----------
+        lo = 100 * alpha / 2.0
+        hi = 100 * (1.0 - alpha / 2.0)
+
+        dist_ci = (float(np.percentile(dist_samples, lo)),
+                   float(np.percentile(dist_samples, hi)))
+        corr_ci = (float(np.percentile(corr_samples, lo)),
+                   float(np.percentile(corr_samples, hi)))
+
+        ci["acf_dist_median"] = dist_ci
+        ci["acf_corr_median"] = corr_ci
+        ci["block_len_used"] = int(Lb)
+        ci["B"] = int(Bboot)
+        ci["level"] = float(ci_level)
+
+        # --- CI-based A2 decision (main improvement) ---
+        dist_max = th["acf_dist_median_max"]
+        corr_min = th["acf_corr_median_min"]
+
+        dist_lo, dist_hi = dist_ci
+        corr_lo, corr_hi = corr_ci
+
+        # PASS if CI is entirely in the acceptable region
+        if (dist_hi <= dist_max) and (corr_lo >= corr_min):
+            A2_status = "PASS"
+            A2_ok = True
+        # FAIL if CI is entirely outside (strong evidence of heterogeneity)
+        elif (dist_lo > dist_max) or (corr_hi < corr_min):
+            A2_status = "FAIL"
+            A2_ok = False
+        # Otherwise: insufficient evidence either way
+        else:
+            A2_status = "INCONCLUSIVE"
+            # keep A2_ok as point estimate for convenience, but mark status explicitly
+            A2_ok = bool(A2_ok_point)
+
+    # ---------------- Final decision (after CI if available) ----------------
+    if A1_ok and A2_ok:
+        decision = "GLOBAL_TEMPORAL_OK"
+        note = "时间二阶平稳且子空间间的时间相关形状一致；可用全局共享的时间模型。"
+    elif A1_ok and not A2_ok:
+        decision = "LOCAL_TEMPORAL_ONLY"
+        note = "时间近似平稳，但不同子空间的时间相关形状存在差异；建议局部时间模型或空间自适应时间核。"
+    elif (not A1_ok) and A2_ok:
+        decision = "DETREND_OR_VARIANCE_STABILIZE"
+        note = "时间非平稳（均值/方差随 t 变动），但各子空间时间相关形状相似；需更强去趋势/稳定化。"
+    else:
+        decision = "NONSTATIONARY_AND_HETEROGENEOUS"
+        note = "时间非平稳且子空间时间相关不一致；建议局部+分段时间建模。"
+
+    # ---------------- Plots ----------------
     # 1) mu_t
     plt.figure()
     plt.plot(mu_t)
-    plt.title("μ_t over time (after detrending)" if detrend else "μ_t over time")
+    plt.title("μ_t over time")
     plt.xlabel("t"); plt.ylabel("μ_t"); plt.grid(True, alpha=0.3); plt.tight_layout()
 
     # 2) sigma_t
     plt.figure()
     plt.plot(sigma_t)
-    plt.title("σ_t over time (after detrending)" if detrend else "σ_t over time")
+    plt.title("σ_t over time")
     plt.xlabel("t"); plt.ylabel("σ_t"); plt.grid(True, alpha=0.3); plt.tight_layout()
 
-    # 3) Global ACF
+    # 3) Global ACF (energy series)
     plt.figure()
     plt.plot(np.arange(len(acf_global)), acf_global, marker="o")
-    plt.title("Global temporal ACF (of spatial mean series)")
+    plt.title("Global temporal ACF (energy series)")
     plt.xlabel("lag h"); plt.ylabel("ρ(h)"); plt.grid(True, alpha=0.3); plt.tight_layout()
 
-    # 4) Block-wise ACFs
+    # 4) Block-wise ACFs (energy series per block)
     plt.figure()
-    for k in range(Bblocks):
+    for k in range(n_blocks):
         plt.plot(acf_blocks[k], label=f"block {k+1}")
-    plt.title("Block-wise temporal ACFs (spatial means in subspaces)")
+    plt.title("Block-wise temporal ACFs (energy series per subspace)")
     plt.xlabel("lag h"); plt.ylabel("ρ(h)"); plt.legend(); plt.grid(True, alpha=0.3); plt.tight_layout()
 
     metrics = dict(
@@ -281,13 +314,16 @@ def temporal_stationarity_diagnostics(
         acf_corr_median=float(corr_median),
         A1_time_WSS_ok=bool(A1_ok),
         A2_temporal_homogeneity_ok=bool(A2_ok),
-        decision=decision,
-        note=note,
+        A2_status=str(A2_status),  # PASS/FAIL/INCONCLUSIVE/POINT_ONLY
+        decision=str(decision),
+        note=str(note),
         thresholds=thresholds,
     )
+
     out = dict(
         mu_t=mu_t,
         sigma_t=sigma_t,
+        global_series=global_series,
         acf_global=acf_global,
         acf_blocks=acf_blocks,
         metrics=metrics,
@@ -297,21 +333,16 @@ def temporal_stationarity_diagnostics(
     return out
 
 
+# res = temporal_stationarity_diagnostics(
+#     noise0,
+#     max_lag=50,
+#     blocks=(2,2),
+#     # Bootstrap 相关
+#     do_bootstrap=True,
+#     B=1000,          # bootstrap 轮数
+#     block_len=None,  # 默认自动=IAT（积分自相关时间）的近似
+#     ci_level=0.95
+# )
 
-sqg = SQGData('SQG.npy', 'inverted_SQG.npy')
-noise0 = sqg.get_field()
-
-res = temporal_stationarity_diagnostics(
-    field=noise0,
-    max_lag=50,
-    blocks=(2,2),
-    detrend=True,
-    trend_window=7,
-    local_standardize=False,
-    do_bootstrap=True,
-    B=1000,
-    block_len=None,   # 现在默认会自动采用更保守的 L，通常 >= 8
-    ci_level=0.95
-)
-print(res["metrics"])
-print(res["bootstrap"])
+# print(res["metrics"])
+# print(res["bootstrap"])   # 里面有 acf_dist_median 与 acf_corr_median 的 CI
