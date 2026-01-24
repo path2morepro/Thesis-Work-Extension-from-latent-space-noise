@@ -8,12 +8,15 @@ import math
 
 class Sampler():
     def __init__(self, device, members, eps, steps, 
-                 invert_eps, invert_steps, model_path, debug=False):
+                 invert_eps, invert_steps, model_path, debug=False, grad=False, deterministic=False):
         self.model = SongUNet(img_resolution=64, in_channels=2, out_channels=2,
                               embedding_type='fourier', encoder_type='residual', decoder_type='standard',
                               channel_mult_noise=2, resample_filter=[1, 3, 3, 1], model_channels=32, channel_mult=[2, 2, 2],
                               attn_resolutions=[32,]
                               )
+        for p in self.model.parameters():
+            p.requires_grad_(False)
+        self.model.eval()
 
         self.model.to(device)
         self.model.eval()
@@ -33,7 +36,8 @@ class Sampler():
         self.invert_steps = invert_steps
         self.eps = eps
         self.steps = steps
-
+        self.grad = grad
+        self.deterministic = deterministic
         self.debug = debug
 
     # Euler-Maruyama sampling with learned b
@@ -41,10 +45,13 @@ class Sampler():
         eps = self.eps
         steps = self.steps
 
-        with torch.no_grad():
+        status = torch.enable_grad() if self.grad else torch.no_grad()
+
+        # 关闭梯度追踪
+        with status:
             tmin, tmax = 0, 1
             zt = z0
-
+            # 创建时间序列（从0到1）
             ts = torch.linspace(tmin, tmax, steps, device=self.device)[:-1]
             dt = (tmax - tmin) / steps
 
@@ -57,9 +64,10 @@ class Sampler():
 
             for t in enum:
                 alpha_t, beta_t = self.alpha(t), self.beta(t)
+                # alpha(t) = t
+                # beta(t) = 1-t
                 alpha_dot_t, gamma_t = self.alpha_dot(t), self.gamma(t)
-
-                eps_t = eps(t)
+                eps_t = eps(t)  
 
                 t_tensor = torch.ones((self.members,), device=self.device) * t
                 b = self.model(zt, t_tensor)
@@ -70,7 +78,8 @@ class Sampler():
                     s, eps_t = 0, 0
 
                 dz = (b + s * eps_t) * dt
-                dW = torch.randn_like(zt) * math.sqrt(2*math.fabs(dt) * eps_t)
+                
+                dW = 0.0 if self.deterministic else torch.randn_like(zt) * math.sqrt(2*math.fabs(dt) * eps_t)
 
                 zt = zt + dz + dW
 
