@@ -19,7 +19,10 @@ class Sampler():
         self.model.eval()
 
         self.model.to(device)
+        # what does it mean? model.eval()?
+        # it means time to predict, don't fuck around: turn off drop off, no update
         self.model.eval()
+        # and what's this?
         self.model.load_state_dict(torch.load(
             model_path, map_location=device, weights_only=True))
 
@@ -47,11 +50,9 @@ class Sampler():
 
         status = torch.enable_grad() if self.grad else torch.no_grad()
 
-        # 关闭梯度追踪
         with status:
             tmin, tmax = 0, 1
             zt = z0
-            # 创建时间序列（从0到1）
             ts = torch.linspace(tmin, tmax, steps, device=self.device)[:-1]
             dt = (tmax - tmin) / steps
 
@@ -70,6 +71,7 @@ class Sampler():
                 eps_t = eps(t)  
 
                 t_tensor = torch.ones((self.members,), device=self.device) * t
+                # which structure it is?
                 b = self.model(zt, t_tensor)
 
                 if t != 1:
@@ -96,6 +98,8 @@ class Sampler():
         eps = self.invert_eps
         steps = self.invert_steps
 
+        # I remember it is used to turn off gradient tracking
+        # honestly I don't know how does this work
         with torch.no_grad():
             tmin, tmax = 1, 0
             zt = z1
@@ -109,20 +113,29 @@ class Sampler():
                 enum = ts
 
             for t in enum:
+                # what do alpha, beta, gamma present? the noise intensity
+                # there is statements before, dot means derivative
                 alpha_t, beta_t = self.alpha(t), self.beta(t)
                 alpha_dot_t, gamma_t = self.alpha_dot(t), self.gamma(t)
                 
                 eps_t = eps(t)
 
                 t_tensor = torch.ones((self.members,), device=self.device) * t
+                
                 b = self.model(zt, t_tensor)
+                # SongUNet, check it out later
+                # what the output would be like?
+                # the output is the predicted velocity field, namely z1-z0
+                # z1 is data, z0 is white noise
 
+                # it's actually ODE so the definition of s would not be used anyway
                 if t != 1:
                     s = (alpha_t * b - alpha_dot_t * zt) / (beta_t * gamma_t)  # s = (t * b - zt) / (1 - t)
                 else:
                     s, eps_t = 0, 0
-
+                # dz/dt = b
                 dz = (b - eps_t * s) * dt
+                # it is forward progress, it's impossible to remove noise
                 dW = torch.randn_like(zt) * math.sqrt(2*math.fabs(dt) * eps_t)
 
                 zt = zt + dz + dW

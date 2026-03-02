@@ -20,6 +20,7 @@ def _detrend_and_standardize(frames, local=False, local_sigma=0):
         return F
     else:
         # 局部均值/方差（用高斯平滑做缓慢变化项）
+        # 看起来对每一帧做标准化，但是为什么要用高斯核进行标准化？
         if local_sigma <= 0:
             local_sigma = max(3, min(X, Y)//16)  # 一个比较稳的缺省
         mu = np.stack([gaussian_filter(F[k], sigma=local_sigma) for k in range(K)], axis=0)
@@ -172,7 +173,7 @@ def _spectrum_and_kappa(frames, smooth_sigma=1.5):
 
 def spatial_correlation_diagnostics(field, average_frames, blocks, n_angles, r_max, use_local_standardize, show_plots, thresholds):
     """
-    基于 2D ACF + 径向平均 的“诊断—决策”实现（第一版核心）。
+    基于 2D ACF + 径向平均 的“诊断—决策”实现。
     输入
     ----
     field: (T, X, Y)
