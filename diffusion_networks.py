@@ -335,6 +335,10 @@ class SongUNet(torch.nn.Module):
         )
 
         # Mapping.
+        # what are you mapping?
+        # and what's the output of mapping, I mean their dimension
+        # 2d->1d?
+        # it's an initialization not function 
         self.map_noise = PositionalEmbedding(
             num_channels=noise_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
         self.map_time = (PositionalEmbedding(num_channels=noise_channels, endpoint=True) if embedding_type ==
@@ -349,9 +353,14 @@ class SongUNet(torch.nn.Module):
             in_features=emb_channels, out_features=emb_channels, **init)
 
         # Encoder.
+        # seems like you use attention here
+        # for what?
         self.enc = torch.nn.ModuleDict()
         cout = in_channels
         caux = in_channels
+        # what's channel_mult?
+        # level decides the depth of U-net
+        # mult decides how many channels of output after each layer
         for level, mult in enumerate(channel_mult):
             res = img_resolution >> level
             if level == 0:
@@ -365,12 +374,18 @@ class SongUNet(torch.nn.Module):
                 if encoder_type == 'skip':
                     self.enc[f'{res}x{res}_aux_down'] = Conv2d(
                         in_channels=caux, out_channels=caux, kernel=0, down=True, resample_filter=resample_filter)
+                    # resample_filter: why we need resample here?
+                    # something like signal processing: I think you should know the feriour stuff first
                     self.enc[f'{res}x{res}_aux_skip'] = Conv2d(
                         in_channels=caux, out_channels=cout, kernel=1, **init)
                 if encoder_type == 'residual':
+                    # I don't know what does the residual mean here
+                    # define a new brach aux
                     self.enc[f'{res}x{res}_aux_residual'] = Conv2d(
                         in_channels=caux, out_channels=cout, kernel=3, down=True, resample_filter=resample_filter, fused_resample=True, **init)
                     caux = cout
+            # rack the Unet blocks up
+            # add attention on certain blocks
             for idx in range(num_blocks):
                 cin = cout
                 cout = model_channels * mult
@@ -408,11 +423,17 @@ class SongUNet(torch.nn.Module):
                     in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)
 
     def forward(self, x, noise_labels, class_labels=None, time_labels=None, augment_labels=None):
+        # noise labels: sigma(t)
+        # class_labels: which concat it should do, haven't figured out
+        # time_labels: time condition, haven't figured out
+        # augment_labels： something about data augment
+
         # Mapping.
         emb = self.map_noise(noise_labels)
         emb = emb.reshape(
             emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)  # swap sin/cos
         if self.map_label is not None:
+            # linear_mapping(class_labels) + emb
             tmp = class_labels
             if self.training and self.label_dropout:
                 tmp = tmp * \
@@ -421,8 +442,10 @@ class SongUNet(torch.nn.Module):
             emb = emb + \
                 self.map_label(tmp * np.sqrt(self.map_label.in_features))
         if self.map_augment is not None and augment_labels is not None:
+            # if there is any, add them together
             emb = emb + self.map_augment(augment_labels)
         if self.map_time is not None and time_labels is not None:
+            # same shit
             tmp = self.map_time(time_labels)
             tmp = tmp.reshape(
                 tmp.shape[0], 2, -1).flip(1).reshape(*tmp.shape)  # swap sin/cos
@@ -431,12 +454,14 @@ class SongUNet(torch.nn.Module):
                     (torch.rand([x.shape[0], 1], device=x.device)
                      >= self.label_dropout).to(tmp.dtype)
             emb = emb + tmp
-
+        # 2 layers of MLP
         emb = silu(self.map_layer0(emb))
         emb = silu(self.map_layer1(emb))
 
         # Conditioning.
         if class_labels is not None:
+            # if there is class_labels, add it into x
+            # differs from adding it into emb, it adds into x
             tmp = class_labels
             if self.training and self.label_dropout:
                 tmp = tmp * \
@@ -455,6 +480,8 @@ class SongUNet(torch.nn.Module):
             elif 'aux_residual' in name:
                 x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
             else:
+                # normal one
+                # add into skips, would be used for skip connection in decoder
                 x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
                 skips.append(x)
 
