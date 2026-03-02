@@ -33,14 +33,28 @@ $\frac{d z_t}{d t}$.
 
 In `sampler.py`, the `invert()` function maps a physical field back into latent space.
 Under the deterministic setting used for inversion, the process can be viewed as an ODE of the form
-$dz = b \, dt$.
+$dz = b * dt$.
 The latent representation of each physical frame is obtained by iterating
 $z_t = z_{t-1} + dz$
 over many small steps.
 
-## Theoretical analysis
+# Theoretical analysis
 
 The model is trained to fit the velocity field along the interpolation path, not the physical time evolution itself.
 This interpolation connects the data distribution to Gaussian noise, $N(0, I)$.
 Therefore, as the inversion proceeds, the latent representation is pushed toward the Gaussian prior.
 In theory, if the model is accurate enough and the numerical integration is sufficiently fine, the inverted latent space should become increasingly close to samples from $N(0, I)$.
+
+# Why the latent space may still be useful for forecasting
+
+Although the inversion is designed to push samples toward a Gaussian prior, this does not mean that the latent space is "just noise" in a trivial sense.
+Different physical samples can still be mapped to different locations within the shared $N(0, I)$ latent space, so the latent coordinates may retain meaningful structure inherited from the original dynamics.
+
+**If the temporal evolution in latent space is simpler than in physical space;**
+
+**If the transition $z_t \rightarrow z_{t+1}$ is more linear;**
+
+**If the uncertainty is easier to model there, then forecasting in latent space may still be advantageous.**
+
+
+In that sense, matching a Gaussian prior does not remove the potential forecasting value of the latent representation; it only defines the global distribution that the inverted samples are encouraged to follow.
