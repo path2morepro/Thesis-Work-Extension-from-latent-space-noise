@@ -1,10 +1,17 @@
 import torch
 from functools import partial
-from diffusion_networks import SongUNet
-
-from tqdm import tqdm
-import numpy as np
 import math
+import sys
+from pathlib import Path
+
+import numpy as np
+from tqdm import tqdm
+
+THIS_DIR = Path(__file__).resolve().parent
+if str(THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(THIS_DIR))
+
+from diffusion_networks import SongUNet
 
 class Sampler():
     def __init__(self, device, members, eps, steps, 
