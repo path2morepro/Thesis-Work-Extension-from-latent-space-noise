@@ -24,32 +24,32 @@ To generate new SQG data, you also need:
 ## What Is the Model Trained To Learn?
 
 The model takes as input
-\[
+$
 z_t = (1 - t) z_0 + t z_1,
-\]
+$
 which is an interpolated intermediate state between the noise sample $z_0$ and the data sample $z_1$.
 
 The training target is
-\[
+$
 \frac{d z_t}{d t},
-\]
+$
 which, under this linear interpolation, is simply
-\[
+$
 z_1 - z_0.
-\]
+$
 
 Therefore, the model learns a time-dependent velocity field along the interpolation path.
 
 ## ODE Induced by the Model Output
 
 In `sampler.py`, the `invert()` function maps a physical field back into latent space. Under the deterministic setting used for inversion, the process can be viewed as an ODE of the form
-\[
+$
 dz = b \, dt.
-\]
+$
 The latent representation of each physical frame is obtained by iterating
-\[
+$
 z_t = z_{t-1} + dz
-\]
+$
 over many small steps.
 
 # Theoretical Analysis
