@@ -1,85 +1,100 @@
-# Noise Latent space
+# Noise Latent Space
 
-This repo contains the files for the research project on forecasting in noise latent spaces in course 732A76.
+This repository contains the code for a research project on forecasting in noise latent spaces for course 732A76.
 
-Example code for inverting and sample is in `playground.ipynb`.
+Example code for inversion and sampling can be found in `playground.ipynb`.
 
-To generate more training data run `sqg_nature_run.py` and then `generate_inverted_timeseries.py`
+To generate additional training data, run `sqg_nature_run.py` first and then `generate_inverted_timeseries.py`.
 
-To sample you need the following packages
-* pytorch
-* numpy
-* matplotlib
+To run the sampling and forecasting code, you need:
+- `pytorch`
+- `numpy`
+- `matplotlib`
 
-To generate new training data you also need
-* pyfftw
-* netcdf4
+To generate new SQG data, you also need:
+- `pyfftw`
+- `netcdf4`
 
-# Where the noise latent space comes from?
- 
+# Where Does the Noise Latent Space Come From?
+
 ## Preliminaries
+
 ![z0 ~ N(0, I) and zt is the original data](image.png)
 
-## What is the model training?
+## What Is the Model Trained To Learn?
 
 The model takes as input
-$z_t = (1-t) * z_0 + t * z_1$, an interpolated intermediate state between $z_0$ and $z_1$.
+\[
+z_t = (1 - t) z_0 + t z_1,
+\]
+which is an interpolated intermediate state between the noise sample $z_0$ and the data sample $z_1$.
+
 The training target is
-$\frac{d z_t}{d t}$, which in this linear interpolation is simply $z_1 - z_0$.
-Therefore, the model output is the predicted time-dependent velocity field
-$\frac{d z_t}{d t}$.
+\[
+\frac{d z_t}{d t},
+\]
+which, under this linear interpolation, is simply
+\[
+z_1 - z_0.
+\]
 
-## ODE composed of model output
+Therefore, the model learns a time-dependent velocity field along the interpolation path.
 
-In `sampler.py`, the `invert()` function maps a physical field back into latent space.
-Under the deterministic setting used for inversion, the process can be viewed as an ODE of the form
-$dz = b * dt$.
+## ODE Induced by the Model Output
+
+In `sampler.py`, the `invert()` function maps a physical field back into latent space. Under the deterministic setting used for inversion, the process can be viewed as an ODE of the form
+\[
+dz = b \, dt.
+\]
 The latent representation of each physical frame is obtained by iterating
-$z_t = z_{t-1} + dz$
+\[
+z_t = z_{t-1} + dz
+\]
 over many small steps.
 
-# Theoretical analysis
+# Theoretical Analysis
 
-The model is trained to fit the velocity field along the interpolation path, not the physical time evolution itself.
-This interpolation connects the data distribution to Gaussian noise, $N(0, I)$.
-Therefore, as the inversion proceeds, the latent representation is pushed toward the Gaussian prior.
-In theory, if the model is accurate enough and the numerical integration is sufficiently fine, the inverted latent space should become increasingly close to samples from $N(0, I)$.
+The model is trained to fit the velocity field along the interpolation path, not the true physical time evolution itself. This interpolation connects the data distribution to Gaussian noise, $N(0, I)$. As inversion proceeds, the latent representation is therefore pushed toward the Gaussian prior.
 
-# Why the latent space may still be useful for forecasting
+In theory, if the model is accurate enough and the numerical integration is sufficiently fine, the inverted latent variables should become increasingly close to samples from $N(0, I)$.
 
-Although the inversion is designed to push samples toward a Gaussian prior, this does not mean that the latent space is "just noise" in a trivial sense.
-Different physical samples can still be mapped to different locations within the shared $N(0, I)$ latent space, so the latent coordinates may retain meaningful structure inherited from the original dynamics.
+# Why the Latent Space May Still Be Useful for Forecasting
 
-1. If the temporal evolution in latent space is simpler than in physical space;
+Although the inversion is designed to push samples toward a Gaussian prior, this does not mean that the latent space is trivially "just noise." Different physical samples can still be mapped to different locations within the shared $N(0, I)$ latent space, so the latent coordinates may retain meaningful structure inherited from the original dynamics.
 
-2. If the transition $z_t \rightarrow z_{t+1}$ is more linear;
-
-3. If the uncertainty is easier to model there, then forecasting in latent space may still be advantageous.
-
+Forecasting in latent space may still be advantageous if:
+1. the temporal evolution in latent space is simpler than in physical space,
+2. the transition $z_t \rightarrow z_{t+1}$ is more linear, or
+3. the uncertainty is easier to model there.
 
 In that sense, matching a Gaussian prior does not remove the potential forecasting value of the latent representation; it only defines the global distribution that the inverted samples are encouraged to follow.
 
-# What time-aligned interpolation actually do?
+# What Does Time-Aligned Interpolation Actually Do?
 
-What this project mainly studies is time-aligned interpolation. More specifically, interpolation is performed between $z_t$ and $z_{t+\delta t}$ in latent space, and the interpolated latent states are then mapped back to the physical field deterministically. These reconstructed fields are finally compared with the true physical frames.
-In the following, I will refer to "time-aligned interpolation" simply as "interpolation". In this project, interpolation is used as a practical diagnostic rather than a definitive test of whether predictable dynamics are preserved in latent space. My original motivation was that if linear or stochastic interpolation can reconstruct intermediate frames with high geometric similarity to the true ones, then the latent representation may still retain some meaningful dynamical structure.
+The main analysis in this project focuses on time-aligned interpolation. More specifically, interpolation is performed between $z_t$ and $z_{t+\delta t}$ in latent space, and the interpolated latent states are then mapped back deterministically to the physical field. These reconstructed fields are then compared with the true physical frames.
+
+In the following, I refer to "time-aligned interpolation" simply as "interpolation." In this project, interpolation is used as a practical diagnostic rather than a definitive test of whether predictable dynamics are preserved in latent space. My original motivation was that if linear or stochastic interpolation could reconstruct intermediate frames with high geometric similarity to the true ones, then the latent representation might still retain some meaningful dynamical structure.
 
 However, the trajectory produced by interpolation is imposed by the interpolation rule itself, whereas the true latent trajectory between two observed states is unknown. For that reason, good interpolation results can indicate geometric consistency or local smoothness, but they do not by themselves prove that the true predictive dynamics have been preserved, simplified, or made easier to forecast in latent space.
 
-# If interpolation cannot achieve any, what is the next step?
+# If Interpolation Cannot Establish This, What Is the Next Step?
 
-The earilst experiment is examining that would forcast latent space eariler than forcast physical space. We can train 2 same models on both datasets, and compare their performance or training.
+The next experiment is to test the forecasting problem more directly: train the same model on the latent-space dataset and on the physical-space dataset, and then compare their performance.
 
-To achieve that, a proper model is important for this comparison. It must be suitable for both 2 datasets. Here ConvLSTM is chosen in this experiment. Comparing to LSTM, ConvLSTM replace the Hadamard product with convolution operation. Therefore it can memorize spactial information. Sounds very fancy and good for the our data. Here are more reasons about why this model:
+To make this comparison meaningful, the model should be suitable for both datasets. In this project, ConvLSTM is used as the benchmark model. Compared with a standard LSTM, ConvLSTM replaces fully connected operations with convolutions, which allows it to preserve spatial information and makes it more appropriate for field data.
 
-1. This model aims to modeling spatiotemperal correlation, especially it has proved good performance on radar or fuild data;
+ConvLSTM is used here for several reasons:
+1. it is designed for spatiotemporal modeling and has been shown to work well on radar-like or fluid-like data,
+2. it does not require a separate statistical model of spatiotemporal correlation before training, which keeps the benchmark simple,
+3. it accepts image-like inputs directly, which is important because the latent states here cannot be compressed into a useful 1D representation, and PCA was not effective,
+4. it is relatively lightweight compared with larger alternatives such as PhyDNet, Stochastic Latent Residual Video Prediction, PredRNN, and Earthformer.
 
-2. There is no need to detect and capture the spatiotemperal correlation in advance. Lots of statistical analysis should be done before we apply any probabilistical model. It's too much for a benchmark check;
+# Experiments and Results
 
-3. This model accpet images as input while latent space cannot be encoded into any 1D vector, or just PCA dosen't work on that;
+A two-layer ConvLSTM model was trained on both datasets. In practice, forecasting in physical space performed much better than forecasting in latent space. In addition, the latent-space training stopped early at epoch 93 out of 100, whereas this did not happen for the physical-space model.
 
-4. This model is more light-weighted, I haven't proven that, but I will(The candidates are PhyDNet, Stochastic Latent Residual Video Prediction, ConvLSTM, PredRNN, Earthformer). 
+After training, the predicted latent state was mapped back to physical space and compared with the true physical field. For the model trained directly on physical space, the prediction was compared with the true data directly. The corresponding results can be found in `trainConvLSTM.ipynb` and `trainConvLSTM_onTrue.ipynb`.
 
-# Experiment
+At least for this benchmark, the latent-space approach did not improve forecasting. It is also worth noting that the mapping between latent space and physical space is deterministic in this setup. If the true latent state is mapped back to physical space, the RMSE should be zero. In other words, the projection itself does not introduce additional error.
 
-
+The main conclusion from this experiment is that compressing the distribution is not the same as simplifying the dynamics. One possible interpretation is that the diffusion model compresses the distribution while also removing part of the dynamical structure. This remains a hypothesis rather than a demonstrated result, but it is the main takeaway from the current benchmark.
