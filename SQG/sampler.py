@@ -26,8 +26,6 @@ class Sampler():
         self.model.eval()
 
         self.model.to(device)
-        # what does it mean? model.eval()?
-        # it means time to predict, don't fuck around: turn off drop off, no update
         self.model.eval()
         # and what's this?
         self.model.load_state_dict(torch.load(
