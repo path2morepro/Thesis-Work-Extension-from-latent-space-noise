@@ -1,5 +1,5 @@
 import numpy as np
-from SQG_generation.sqgturb import SQG, rfft2, irfft2
+from sqgturb import SQG, rfft2, irfft2
 import os
 from tqdm import tqdm
 
