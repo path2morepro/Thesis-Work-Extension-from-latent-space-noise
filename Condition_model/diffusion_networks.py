@@ -535,7 +535,7 @@ class EDMPrecond(torch.nn.Module):
 
     def forward(self, x, sigma, class_labels=None, time_labels=None):
         x = x.to(torch.float32)
-        sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
+        sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)  
         dtype = torch.float32
 
         c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)

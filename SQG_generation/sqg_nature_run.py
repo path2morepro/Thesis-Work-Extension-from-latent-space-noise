@@ -110,7 +110,7 @@ for version in tqdm(range(versions)):
 
     #  initialize figure.
     # TODO: Would be nicer if we can just set how many frames we want and what interval
-    hrs = 3
+    hrs = 1
     outputinterval = hrs*3600.  # interval between frames in seconds                3 is 3hr
     tmin = 300. * \
         86400.  # time to start saving data (in days). DO NOT use number smaller than 100. need enough spinup time

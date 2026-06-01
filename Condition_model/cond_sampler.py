@@ -28,7 +28,7 @@ class CondSampler:
         model_path,
         device,
         steps=100,
-        invert_steps=500,
+        invert_steps=100,
         eps=None,
         invert_eps=None,
         debug=False,
@@ -109,10 +109,10 @@ class CondSampler:
                 s_vec = torch.full((B,), t_val, device=self.device)
                 b = self.model(zt, s_vec, class_labels=x_t)
 
-                score = self._score(t_val, b, zt) if eps_t > 0 else 0.0
+                score = self._score(t_val, b, zt) if eps_t > 0 else 0.0  # what's the difference between score and b?
 
                 dz = (b + score * eps_t) * dt
-                dW = (torch.randn_like(zt) * math.sqrt(2.0 * dt * eps_t)
+                dW = (torch.randn_like(zt) * math.sqrt(2.0 * dt * eps_t) # fabs(dt)
                       if eps_t > 0 else 0.0)
                 zt = zt + dz + dW
 

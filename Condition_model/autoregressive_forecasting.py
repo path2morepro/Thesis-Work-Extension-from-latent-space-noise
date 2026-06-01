@@ -9,80 +9,47 @@ Provides functions for:
 - Full evaluation pipeline
 """
 
+import math
 import sys
 from pathlib import Path
 from typing import Tuple, Optional
 
 import numpy as np
 import torch
-from tqdm import tqdm
-
-# Import SongUNet
-SQG_DIR = Path(__file__).parent / 'SQG'
-if str(SQG_DIR) not in sys.path:
-    sys.path.insert(0, str(SQG_DIR))
-from diffusion_networks import SongUNet
-
+from cond_sampler import CondSampler
 
 # ============================================================================
-# Config & Model Loading
+# Sampling Noise From OU
 # ============================================================================
-
-class AutoregressiveConfig:
-    """Configuration for autoregressive evaluation."""
-
-    def __init__(
-        self,
-        model_path: str = '../models/results/best_model_conditional.pth',
-        data_std: float = 2660.0,
-        img_channels: int = 2,
-        img_resolution: int = 64,
-        filters: int = 32,
-        label_dropout: float = 0.1,
-        n_ensemble: int = 10,
-        ode_steps: int = 100,
-        device: Optional[torch.device] = None,
-    ):
-        self.model_path = Path(model_path)
-        self.data_std = data_std
-        self.img_channels = img_channels
-        self.img_resolution = img_resolution
-        self.filters = filters
-        self.label_dropout = label_dropout
-        self.n_ensemble = n_ensemble
-        self.ode_steps = ode_steps
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-
-def load_model(config: AutoregressiveConfig) -> SongUNet:
+def get_latent(
+    z_prev: Optional[torch.Tensor],
+    shape: Tuple[int, ...],
+    rho: float = 0.0,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
     """
-    Load the trained conditional flow-matching model.
+    Sample latent noise from a discrete-time Ornstein-Uhlenbeck process.
+
+    z_next = rho * z_prev + sqrt(1 - rho^2) * xi,   xi ~ N(0, I)
+
+    This preserves N(0, I) marginals for all rho in [0, 1).
+    rho=0  -> independent noise, identical to torch.randn (original behaviour).
+    rho->1 -> strongly correlated noise across rollout steps.
 
     Args:
-        config: AutoregressiveConfig instance
+        z_prev : previous latent tensor, shape `shape`, on any device; None on first step
+        shape  : desired output shape, e.g. (n_ensemble, C, H, W)
+        rho    : temporal correlation coefficient in [0, 1)
+        device : target device for the output tensor
 
     Returns:
-        Loaded SongUNet model on the specified device
+        z_next : shape `shape`, on `device`
     """
-    model = SongUNet(
-        img_resolution=config.img_resolution,
-        in_channels=config.img_channels * 2,  # noisy z + condition
-        out_channels=config.img_channels,
-        embedding_type='fourier',
-        encoder_type='residual',
-        decoder_type='standard',
-        channel_mult_noise=2,
-        resample_filter=[1, 3, 3, 1],
-        model_channels=config.filters,
-        channel_mult=[2, 2, 2],
-        attn_resolutions=[32],
-        label_dropout=config.label_dropout,
-    ).to(config.device)
+    xi = torch.randn(shape, device=device)
+    if z_prev is None or rho == 0.0:
+        return xi
+    return rho * z_prev + math.sqrt(1.0 - rho * rho) * xi
 
-    model.load_state_dict(torch.load(config.model_path, map_location=config.device))
-    model.eval()
-
-    return model
 
 
 # ============================================================================
@@ -90,79 +57,46 @@ def load_model(config: AutoregressiveConfig) -> SongUNet:
 # ============================================================================
 
 @torch.no_grad()
-def sample_one_step(
-    model: SongUNet,
-    x_t: torch.Tensor,
-    steps: int = 100,
-    device: Optional[torch.device] = None,
-) -> torch.Tensor:
-    """
-    One conditional flow ODE solve: noise → x_{t+1}.
-
-    Uses Euler integration from s=0 (noise) to s=1 (data).
-
-    Args:
-        model  : trained SongUNet
-        x_t    : conditioning state, shape (B, C, H, W)
-        steps  : number of Euler steps
-        device : torch device (inferred from model if not provided)
-
-    Returns:
-        x_t1_pred, shape (B, C, H, W)
-    """
-    if device is None:
-        device = next(model.parameters()).device
-
-    B = x_t.shape[0]
-    dt = 1.0 / steps
-    z = torch.randn_like(x_t)  # fresh noise each call
-
-    for i in range(steps):
-        s = torch.full((B,), i * dt, device=device)
-        b = model(z, s, class_labels=x_t)  # predicted velocity
-        z = z + b * dt  # Euler step
-
-    return z
-
-
-@torch.no_grad()
 def autoregressive_ensemble_rollout(
-    model: SongUNet,
     x0: torch.Tensor,
     rollout_steps: int,
     n_ensemble: int,
-    ode_steps: int = 100,
     device: Optional[torch.device] = None,
+    sampler: CondSampler = None,
+    rho: float = 0.0,
 ) -> np.ndarray:
     """
     Roll out an ensemble of trajectories autoregressively.
 
     Generates n_ensemble independent trajectories by sampling at each step.
     All ensemble members start from the same x0 but with different random noise.
+    Latent noise is drawn from a discrete-time OU process with correlation rho;
+    rho=0 recovers independent noise (original behaviour).
 
     Args:
-        model         : trained SongUNet
         x0            : initial condition, shape (C, H, W)
         rollout_steps : number of autoregressive steps
         n_ensemble    : number of ensemble members
-        ode_steps     : Euler steps per ODE solve
         device        : torch device (inferred from model if not provided)
+        sampler       : CondSampler instance
+        rho           : OU temporal correlation coefficient in [0, 1)
 
     Returns:
         preds : np.ndarray, shape (rollout_steps, n_ensemble, C, H, W)
                 All values in normalized space (same units as input).
     """
     if device is None:
-        device = next(model.parameters()).device
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Broadcast x0 across ensemble members: (n_ensemble, C, H, W)
     x_current = x0.unsqueeze(0).expand(n_ensemble, -1, -1, -1).clone().to(device)
-
     preds = []
+    z_latent = None
     for _ in range(rollout_steps):
-        x_next = sample_one_step(model, x_current, steps=ode_steps, device=device)
-        preds.append(x_next.cpu().numpy())
-        x_current = x_next  # feed prediction forward
+        z_latent = get_latent(z_latent, x_current.shape, rho, device)
+        x_next = sampler.sample(z0=z_latent, x_t=x_current)
+        preds.append(x_next.numpy())
+        x_current = x_next.to(device)
 
     return np.stack(preds, axis=0)  # (rollout_steps, n_ensemble, C, H, W)
 
@@ -267,70 +201,6 @@ def compute_ssr(
 
     return spread / (rmse + 1e-8)
 
-
-# ============================================================================
-# Full Evaluation Pipeline
-# ============================================================================
-
-def evaluate_autoregressive(
-    model: SongUNet,
-    val_trajs: list,
-    init_points: list,
-    rollout_steps: int = 20,
-    n_ensemble: int = 10,
-    ode_steps: int = 100,
-    device: Optional[torch.device] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Run full autoregressive evaluation over multiple init points.
-
-    Args:
-        model         : trained SongUNet
-        val_trajs     : list of torch tensors, each shape (T, C, H, W)
-        init_points   : list of (traj_idx, time_idx) tuples
-        rollout_steps : number of autoregressive steps
-        n_ensemble    : ensemble size
-        ode_steps     : ODE integration steps
-        device        : torch device
-
-    Returns:
-        (lead_times, mean_rmse, mean_crps, mean_ssr)
-        All arrays have shape (rollout_steps,)
-    """
-    if device is None:
-        device = next(model.parameters()).device
-
-    all_rmse = []
-    all_crps = []
-    all_ssr = []
-
-    for ti, t in tqdm(init_points, desc='Evaluating init points'):
-        x0 = val_trajs[ti][t]  # (C, H, W)
-        truth = val_trajs[ti][t + 1 : t + 1 + rollout_steps].numpy()  # (steps, C, H, W)
-
-        # Ensemble rollout
-        preds = autoregressive_ensemble_rollout(
-            model, x0, rollout_steps, n_ensemble, ode_steps, device=device
-        )  # (steps, n_ens, C, H, W)
-
-        preds_mean = preds.mean(axis=1)  # (steps, C, H, W)
-
-        rmse = compute_rmse(preds_mean, truth)  # (steps,)
-        crps = compute_crps(preds, truth)  # (steps,)
-        ssr = compute_ssr(preds, rmse)  # (steps,)
-
-        all_rmse.append(rmse)
-        all_crps.append(crps)
-        all_ssr.append(ssr)
-
-    # Average over init points
-    mean_rmse = np.stack(all_rmse).mean(axis=0)  # (steps,)
-    mean_crps = np.stack(all_crps).mean(axis=0)
-    mean_ssr = np.stack(all_ssr).mean(axis=0)
-
-    lead_times = np.arange(1, rollout_steps + 1)
-
-    return lead_times, mean_rmse, mean_crps, mean_ssr
 
 
 def print_metrics(
