@@ -3,3 +3,8 @@ __pycache__/
 __MACOSX/
 .venv/
 *.nc
+*.pdf
+*.png
+*.gif
+*.csv
+*.zarr

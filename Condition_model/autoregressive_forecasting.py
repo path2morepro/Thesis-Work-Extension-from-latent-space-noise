@@ -89,6 +89,8 @@ def autoregressive_ensemble_rollout(
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Broadcast x0 across ensemble members: (n_ensemble, C, H, W)
+    # In AR, there is no explicit modeling about leading time
+    # I don't know whether it would be a problem
     x_current = x0.unsqueeze(0).expand(n_ensemble, -1, -1, -1).clone().to(device)
     preds = []
     z_latent = None
