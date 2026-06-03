@@ -260,7 +260,7 @@ class SongUNet(torch.nn.Module):
         decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
         resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
 
-        time_emb            = 0,            # If time labels, 0 = no time labels.
+        time_emb            = 1,            # If time labels, 0 = no time labels.
     ):
         assert embedding_type in ['fourier', 'positional']
         assert encoder_type in ['standard', 'skip', 'residual']
