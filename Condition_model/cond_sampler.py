@@ -31,6 +31,7 @@ class CondSampler:
         invert_steps=100,
         eps=None,
         invert_eps=None,
+        lead_times=None,
         debug=False,
     ):
         """
@@ -57,6 +58,8 @@ class CondSampler:
             channel_mult=[2, 2, 2],
             attn_resolutions=[32],
             label_dropout=0.1,
+            time_emb=1,          # enable map_time so the lead-time condition is used
+                                 # (must match training; checkpoint has map_time.freqs)
         )
         self.model.load_state_dict(
             torch.load(model_path, map_location=device, weights_only=True)
@@ -79,7 +82,7 @@ class CondSampler:
             return (t_val * b - zt) / beta
         return torch.zeros_like(b)
 
-    def sample(self, z0, x_t):
+    def sample(self, z0, x_t, lead_times=None):
         """
         Forward ODE: latent noise z0 → physical forecast x_{t+1}, conditioned on x_t.
 
@@ -97,6 +100,8 @@ class CondSampler:
 
         zt = z0.to(self.device)
         x_t = x_t.to(self.device)
+        if lead_times is not None:
+            lead_times = lead_times.to(self.device)
 
         trajectory = [zt.clone().cpu()] if self.debug else None
 
@@ -107,7 +112,10 @@ class CondSampler:
                 eps_t = float(self.eps(t_val))
 
                 s_vec = torch.full((B,), t_val, device=self.device)
-                b = self.model(zt, s_vec, class_labels=x_t)
+                # lead_times is the (B,) lead-time condition; it is fixed for the
+                # whole ODE integration (only the interpolant time s_vec changes).
+                b = self.model(zt, s_vec, class_labels=x_t, time_labels=lead_times)
+
 
                 score = self._score(t_val, b, zt) if eps_t > 0 else 0.0  # what's the difference between score and b?
 
@@ -124,38 +132,39 @@ class CondSampler:
             return result, torch.stack(trajectory, dim=1)
         return result
 
-    def invert(self, x_t1, x_t):
-        """
-        Reverse ODE: physical field x_{t+1} → latent noise z0, conditioned on x_t.
+    # def invert(self, x_t1, x_t):
+    #     """
+    #     I even don't think I need this function
+    #     Reverse ODE: physical field x_{t+1} → latent noise z0, conditioned on x_t.
 
-        Args:
-            x_t1 : next state to invert, shape (B, 2, H, W)
-            x_t  : conditioning previous state, shape (B, 2, H, W)
+    #     Args:
+    #         x_t1 : next state to invert, shape (B, 2, H, W)
+    #         x_t  : conditioning previous state, shape (B, 2, H, W)
 
-        Returns:
-            latent noise z0 on CPU, shape (B, 2, H, W)
-        """
-        B = x_t1.shape[0]
-        dt = -1.0 / self.invert_steps
-        ts = torch.linspace(1, 0, self.invert_steps + 1, device=self.device)[:-1]
+    #     Returns:
+    #         latent noise z0 on CPU, shape (B, 2, H, W)
+    #     """
+    #     B = x_t1.shape[0]
+    #     dt = -1.0 / self.invert_steps
+    #     ts = torch.linspace(1, 0, self.invert_steps + 1, device=self.device)[:-1]
 
-        zt = x_t1.to(self.device)
-        x_t = x_t.to(self.device)
+    #     zt = x_t1.to(self.device)
+    #     x_t = x_t.to(self.device)
 
-        with torch.no_grad():
-            enum = tqdm(ts, desc='invert') if self.debug else ts
-            for t in enum:
-                t_val = t.item()
-                eps_t = float(self.invert_eps(t_val))
+    #     with torch.no_grad():
+    #         enum = tqdm(ts, desc='invert') if self.debug else ts
+    #         for t in enum:
+    #             t_val = t.item()
+    #             eps_t = float(self.invert_eps(t_val))
 
-                s_vec = torch.full((B,), t_val, device=self.device)
-                b = self.model(zt, s_vec, class_labels=x_t)
+    #             s_vec = torch.full((B,), t_val, device=self.device)
+    #             b = self.model(zt, s_vec, class_labels=x_t)
 
-                score = self._score(t_val, b, zt) if eps_t > 0 else 0.0
+    #             score = self._score(t_val, b, zt) if eps_t > 0 else 0.0
 
-                dz = (b - score * eps_t) * dt
-                dW = (torch.randn_like(zt) * math.sqrt(2.0 * abs(dt) * eps_t)
-                      if eps_t > 0 else 0.0)
-                zt = zt + dz + dW
+    #             dz = (b - score * eps_t) * dt
+    #             dW = (torch.randn_like(zt) * math.sqrt(2.0 * abs(dt) * eps_t)
+    #                   if eps_t > 0 else 0.0)
+    #             zt = zt + dz + dW
 
-        return zt.cpu()
+    #     return zt.cpu()

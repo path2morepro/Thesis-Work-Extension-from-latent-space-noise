@@ -3,7 +3,7 @@ from sqgturb import SQG, rfft2, irfft2
 import os
 from tqdm import tqdm
 
-versions = 1  # We need one version for each dataset (train, val or test)
+versions = 500  # We need one version for each dataset (train, val or test)
 
 for version in tqdm(range(versions)):
     # run SQG turbulence simulation, optionally plotting results to screen and/or saving to
@@ -109,17 +109,15 @@ for version in tqdm(range(versions)):
                 precision=precision, tstart=0)
 
     #  initialize figure.
-    # TODO: Would be nicer if we can just set how many frames we want and what interval
+    nframes = 100
     hrs = 1
-    outputinterval = hrs*3600.  # interval between frames in seconds                3 is 3hr
-    tmin = 300. * \
-        86400.  # time to start saving data (in days). DO NOT use number smaller than 100. need enough spinup time
-    # 312.5*86400. # time to stop (in days) # NOTE: This is set to generate trajectoreis of 100 steps, each 3 hours apart.
-    tmax = 312.5*86400.
+    outputinterval = hrs*3600.
+    tmin = 300.*86400.
+    tmax = tmin + (nframes - 1)*outputinterval
     nsteps = int(tmax/outputinterval)  # number of time steps to animate
 
     print(
-        f"Running SQG turbulence simulation, generating {(tmax-tmin)/outputinterval} frames, each {outputinterval/3600.} hours apart.")
+        f"Running SQG turbulence simulation, generating {nframes} frames, each {outputinterval/3600.} hours apart.")
 
     # set number of timesteps to integrate for each call to model.advance
     model.timesteps = int(outputinterval/model.dt)
