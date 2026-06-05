@@ -15,8 +15,8 @@ THIS_DIR     = Path(__file__).resolve().parent
 PROJECT_ROOT = THIS_DIR.parent
 
 # Convenience paths — pass either as data_dir to SQGPairDataset
-DATA_1H = PROJECT_ROOT / "data"           # sqg_N64_1hrly_*.npy  (100 trajectories)
-DATA_3H = PROJECT_ROOT / "3hour_data"     # sqg_N64_3hrly_*.npy  (100 trajectories)
+DATA_100 = PROJECT_ROOT / "data"           # sqg_N64_1hrly_*.npy  (100 trajectories)
+DATA_500 = PROJECT_ROOT / "data_500traj"     # sqg_N64_3hrly_*.npy  (100 trajectories)
 
 
 class SQGDataset(Dataset):

@@ -74,33 +74,10 @@ def compute_crps(
         return np.mean(crps_field)
 
 
-def compute_ssr(
-    preds: np.ndarray,
-    rmse: np.ndarray,
-) -> np.ndarray:
-    """
-    Compute Spread/Skill Ratio (calibration metric).
-
-    SSR = ensemble_spread / RMSE
-
-    Well-calibrated when SSR ≈ 1.0 (spread matches skill).
-
-    Args:
-        preds : shape (rollout_steps, n_ensemble, C, H, W) or similar
-        rmse  : shape (rollout_steps,) or scalar
-
-    Returns:
-        ssr : same shape as rmse
-    """
-    # Ensemble std averaged over spatial dims
-    if preds.ndim == 5:
-        spread = preds.std(axis=1).mean(axis=(1, 2, 3))  # (steps,)
-    elif preds.ndim == 4:
-        spread = preds.std(axis=0).mean(axis=(1, 2))
-    else:
-        spread = preds.std(axis=0)
-
-    return spread / (rmse + 1e-8)
+def compute_ssr(preds: np.ndarray, rmse: np.ndarray) -> np.ndarray:
+    N = preds.shape[1]  # ensemble size
+    spread = preds.std(axis=1, ddof=1).mean(axis=(1,2,3))   # unbiased
+    return np.sqrt((N+1)/N) * spread / (rmse + 1e-8)        # with correction
 
 
 

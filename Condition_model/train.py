@@ -34,7 +34,7 @@ if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
 from diffusion_networks import SongUNet
-from dataset import SQGLeadTimeDataset, DATA_1H, DATA_3H
+from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
 from loss import flow_matching_loss
 
 
@@ -43,7 +43,7 @@ from loss import flow_matching_loss
 # ============================================================================
 
 # ── data ──────────────────────────────────────────────────────────────────
-DATA_DIR = DATA_1H   # change to DATA_3H for 3-hour data
+DATA_DIR = DATA_500   # change to DATA_3H for 3-hour data
 DATA_STD = 2660.0    # normalisation std (mean assumed 0)
 
 # ── model ─────────────────────────────────────────────────────────────────
