@@ -169,29 +169,6 @@ def train():
     with open(LOG_PATH, 'w', newline='') as f:
         csv.writer(f).writerow(['epoch', 'train_loss', 'val_loss'])
 
-    # for epoch in range(NUM_EPOCHS):
-    #     avg_train = run_epoch(model, train_loader, device, optimizer, warmup,
-    #                           desc=f'Epoch {epoch+1}/{NUM_EPOCHS} [train]')
-    #     avg_val = run_epoch(model, val_loader, device)
-
-    #     train_losses.append(avg_train)
-    #     val_losses.append(avg_val)
-    #     scheduler.step()   # cosine decay steps per epoch
-
-    #     if avg_val < best_val_loss:
-    #         best_val_loss = avg_val
-    #         torch.save(model.state_dict(), SAVE_PATH)
-    #         tag = '  <- best'
-    #     else:
-    #         tag = ''
-
-    #     with open(LOG_PATH, 'a', newline='') as f:
-    #         csv.writer(f).writerow([epoch + 1, avg_train, avg_val])
-
-    #     print(f'Epoch {epoch+1:3d}  train={avg_train:.4f}  val={avg_val:.4f}{tag}')
-    # # there is no early stoppping
-    # print(f'\nTraining done. Best val loss: {best_val_loss:.4f}')
-
     patience = 20  # stop if val loss doesn't improve for N epochs
     patience_counter = 0
 

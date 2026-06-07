@@ -380,6 +380,7 @@ class SongUNet(torch.nn.Module):
                         in_channels=caux, out_channels=cout, kernel=1, **init)
                 if encoder_type == 'residual':
                     # I don't know what does the residual mean here
+
                     # define a new brach aux
                     self.enc[f'{res}x{res}_aux_residual'] = Conv2d(
                         in_channels=caux, out_channels=cout, kernel=3, down=True, resample_filter=resample_filter, fused_resample=True, **init)

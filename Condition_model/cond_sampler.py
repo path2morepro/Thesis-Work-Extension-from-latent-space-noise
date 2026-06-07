@@ -14,7 +14,7 @@ from diffusion_networks import SongUNet
 
 class CondSampler:
     """
-    Conditional flow-matching sampler for p(x_{t+1} | x_t).
+    Conditional flow-matching sampler for p(x_{t+lead_time} | x_t).
 
     Operates on 2-level SQG fields: all inputs/outputs are (B, 2, H, W).
     The model receives z_s and x_t concatenated channel-wise → (B, 4, H, W).
@@ -31,7 +31,6 @@ class CondSampler:
         invert_steps=100,
         eps=None,
         invert_eps=None,
-        lead_times=None,
         debug=False,
     ):
         """
@@ -117,7 +116,7 @@ class CondSampler:
                 b = self.model(zt, s_vec, class_labels=x_t, time_labels=lead_times)
 
 
-                score = self._score(t_val, b, zt) if eps_t > 0 else 0.0  # what's the difference between score and b?
+                score = self._score(t_val, b, zt) if eps_t > 0 else 0.0  
 
                 dz = (b + score * eps_t) * dt
                 dW = (torch.randn_like(zt) * math.sqrt(2.0 * dt * eps_t) # fabs(dt)

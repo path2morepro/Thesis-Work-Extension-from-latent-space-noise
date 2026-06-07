@@ -15,33 +15,8 @@ THIS_DIR     = Path(__file__).resolve().parent
 PROJECT_ROOT = THIS_DIR.parent
 
 # Convenience paths — pass either as data_dir to SQGPairDataset
-DATA_100 = PROJECT_ROOT / "data"           # sqg_N64_1hrly_*.npy  (100 trajectories)
-DATA_500 = PROJECT_ROOT / "data_500traj"     # sqg_N64_3hrly_*.npy  (100 trajectories)
-
-
-class SQGDataset(Dataset):
-    """Single-frame SQG dataset.  Normalisation: mean=0, std=2660."""
-
-    def __init__(self, data_path, mean=NORM_MEAN, std=NORM_STD):
-        self.mean = mean
-        self.std  = std
-        path = Path(data_path)
-        if not path.suffix:
-            path = path.with_suffix(".npy")
-        if not path.is_absolute():
-            for base in (Path.cwd(), PROJECT_ROOT, PROJECT_ROOT / "data", THIS_DIR):
-                candidate = base / path
-                if candidate.exists():
-                    path = candidate
-                    break
-        self.data = torch.tensor(np.load(path).astype(np.float32))
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return (self.data[idx] - self.mean) / self.std
-
+DATA_100 = PROJECT_ROOT / "data"           # (100 trajectories)
+DATA_500 = PROJECT_ROOT / "data_500traj"     #   (500 trajectories)
 
 
 class SQGLeadTimeDataset(Dataset):
@@ -49,8 +24,9 @@ class SQGLeadTimeDataset(Dataset):
     Direct lead-time dataset for CEWF-style (non-autoregressive) forecasting.
 
     Returns (previous, current, time_label[s]) where previous is the single
-    initial frame x₀ (conditioning window = 1, no static fields), current is
-    the target frame(s), and time_label[s] are normalized lead times.
+    initial frame x_0 for each trajectory (conditioning window = 1, no static fields), 
+    NOT SURE wether fixed previous frame would affact the performance, but it supports the max lead time for forecasting
+    current is the target frame(s), and time_label[s] are normalized lead times.
 
     Lead-time convention
     --------------------
@@ -112,7 +88,7 @@ class SQGLeadTimeDataset(Dataset):
 
     def __init__(
         self,
-        data_dir=DATA_1H,
+        data_dir=DATA_500,
         std=NORM_STD,
         split='train',
         train_frac=0.8,
@@ -146,6 +122,7 @@ class SQGLeadTimeDataset(Dataset):
         # load every trajectory once; __getitem__ indexes into these tensors
         self.data = [
             torch.tensor(np.load(f).astype(np.float32) / std)
+            # is there any effect from float32? barely
             for f in files
         ]
 
@@ -155,10 +132,13 @@ class SQGLeadTimeDataset(Dataset):
         self.random_lead_time = random_lead_time
 
         if random_lead_time:
+            # you can also call this as train mode
+
             # Training: anchor = first frame (t=0) of every trajectory, paired
             # with EVERY lead k in [1, max_lead_frames]. Each (trajectory, k) is
             # a distinct, deterministic sample  ->  len = n_traj * max_lead_frames.
             # (Leads are enumerated as separate indices, not drawn randomly; with
+
             # DataLoader shuffle=True they are shuffled across the epoch, so every
             # lead is seen exactly n_traj times per epoch.)
             min_T = min(traj.shape[0] for traj in self.data)
@@ -183,6 +163,8 @@ class SQGLeadTimeDataset(Dataset):
             assert max_valid_t > 0, (
                 f"Trajectories (min T={min_T}) too short for max lead {max_k} frames."
             )
+            # is this duplicatel logic
+            # but it's for eval mode
 
             rng          = np.random.default_rng(seed)
             traj_indices = rng.integers(0, len(self.data), size=n_init)
