@@ -122,7 +122,6 @@ class SQGLeadTimeDataset(Dataset):
         # load every trajectory once; __getitem__ indexes into these tensors
         self.data = [
             torch.tensor(np.load(f).astype(np.float32) / std)
-            # is there any effect from float32? barely
             for f in files
         ]
 

@@ -28,7 +28,7 @@ if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
 from cond_sampler import CondSampler
-from dataset import SQGLeadTimeDataset, DATA_1H, DATA_3H
+from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
 from utils import compute_rmse, compute_crps, compute_ssr, print_metrics
 
 DEFAULT_MODEL_PATH = THIS_DIR.parent / 'models' / 'best_model_conditional.pth'
@@ -132,7 +132,7 @@ def forecasting(
 @torch.no_grad()
 def predict(
     model_path=DEFAULT_MODEL_PATH,
-    data_dir=DATA_1H,
+    data_dir=DATA_500,
     split: str = 'val',
     forecasting_leads: Optional[Sequence[int]] = (1, 5, 10, 20, 50, 75, 99),
     n_init: int = 20,
