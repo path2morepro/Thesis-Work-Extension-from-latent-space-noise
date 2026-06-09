@@ -161,6 +161,9 @@ print(f"We do {len(loader)} batches",  flush=True)
 model.eval()
 
 # Initialize the dimensions based on the first batch
+# In my code, I use fixed previous (frames[0] for each trajectory) no matter it's train or eval
+# I didn't find any about random initialize x_0
+# But in terms of the comment, it is.
 previous, current, time_labels = next(iter(loader))
 n_times = time_labels.shape[1]
 n_conditions = previous.shape[1]
@@ -199,13 +202,17 @@ def get_latents(latent_shape, n_direct, alpha=1.0):
     return z
 
 # Combined implementation of Algorithm 1, 2 and 3 in the paper
+# it is from me for understanding how to perform ar on the continuous forecasting
+# I mean I thought it would be in a function
 for previous, current, time_labels in tqdm(loader):        
     n_samples = current.shape[0]
 
     with torch.no_grad():
         previous = previous.to(device)
         current = current.view(-1, num_variables, dx, dy).to(device)
-        
+
+        # from me: t_iter, what's this? Maximum lead time for iterative forecasting
+        # why we need this? why we need set a maximum lead time for each iteration?
         direct_time_labels = torch.tensor(np.array([x for x in time_labels[0] if x <= t_iter]), device=device)
         n_iter = time_labels.shape[1] // direct_time_labels.shape[0]
         n_direct = direct_time_labels.shape[0]
@@ -213,6 +220,9 @@ for previous, current, time_labels in tqdm(loader):
         # from claude: you feed each prediction back as the next condition (autoregression). Here the SAME initial condition
         # `previous` is repeated for every lead time and every ensemble member — there is no autoregression within a direct block.
         # Each (lead, member) pair gets the original IC and its own time_label; the model jumps directly to that lead.
+        
+        # from me: ok, question time, could you explain why algorithm 3 also mentions about ar?
+        # and on the basis of the comment above, there should be code for ar, right?
         class_labels = previous.repeat_interleave(n_direct * n_ens, dim=0) # Can not be changed if batchsz > 1
 
         static_fields = class_labels[:, -num_static_fields:]
@@ -234,6 +244,7 @@ for previous, current, time_labels in tqdm(loader):
                 # from claude: you call your sampler without time_labels. The fourth argument here —
                 # direct_time_labels_repeated / max_horizon — is the normalized lead time passed into every net() call
                 # inside the ODE loop so the network knows which lead it is denoising toward.
+                # from me: now I have, invalid comment
                 predicted = sampler_fn(model, latents, class_labels, direct_time_labels_repeated / max_horizon,
                                     sigma_max=80, sigma_min=0.03, rho=7, num_steps=20, S_churn=2.5, S_min=0.75, S_max=80, S_noise=1.05)
 
@@ -341,3 +352,7 @@ group.array('dx_truth', dx_truth, overwrite=True)
 group.array('times', forecasting_times, overwrite=True)
 
 print(f"Metrics saved under {name}")
+
+
+# Conclusion, I cannot find any about ar in this code......
+# I am a dump.
