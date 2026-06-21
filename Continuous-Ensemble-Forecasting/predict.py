@@ -166,6 +166,7 @@ model.eval()
 # But in terms of the comment, it is.
 previous, current, time_labels = next(iter(loader))
 n_times = time_labels.shape[1]
+# the length of forecasting lead time
 n_conditions = previous.shape[1]
 dx = current.shape[2]
 dy = current.shape[3]    
@@ -206,67 +207,129 @@ def get_latents(latent_shape, n_direct, alpha=1.0):
 # I mean I thought it would be in a function
 for previous, current, time_labels in tqdm(loader):        
     n_samples = current.shape[0]
+    # n_samples is the batch size
 
     with torch.no_grad():
         previous = previous.to(device)
         current = current.view(-1, num_variables, dx, dy).to(device)
+        # what does -1 mean in the reshape function?
+        # what happens in this transformation
+        # [n_samples, n_times, ...] -> [n_samples * n_times, ...]
+        # but I mean if the bs should only be 1, what's the point?
+        # reduce the dimension, that's the point.
 
         # from me: t_iter, what's this? Maximum lead time for iterative forecasting
         # why we need this? why we need set a maximum lead time for each iteration?
+        # direct time? 
+        # These are the lead times the model forecasts in one shot from a single initial condition. 
+        # "Direct" = no AR iteration needed, just one model call. 
+        # t_iter=24 defines the boundary: beyond 24h you need to feed predictions back.
         direct_time_labels = torch.tensor(np.array([x for x in time_labels[0] if x <= t_iter]), device=device)
+        # time_labels[0] = [6,12,18,24,30,...,240]
+        # filter x <= 24 → [6, 12, 18, 24]
         n_iter = time_labels.shape[1] // direct_time_labels.shape[0]
+        # n_iter = 40 // 4 = 10 
+        # — how many AR steps to cover 240h total.
+        # why it calculates in this way? or why this way works?
+        # I know now: as one wants to predict, it actually only inputs the lead time it wants to predict, like 10days
+        # but in the code, part of forecasting performed by continuous forecasting meanwhile the rest performed by ar
+        # so... 
         n_direct = direct_time_labels.shape[0]
 
-        # from claude: you feed each prediction back as the next condition (autoregression). Here the SAME initial condition
-        # `previous` is repeated for every lead time and every ensemble member — there is no autoregression within a direct block.
-        # Each (lead, member) pair gets the original IC and its own time_label; the model jumps directly to that lead.
+        class_labels = previous.repeat_interleave(n_direct * n_ens, dim=0) 
+        # Can not be changed if batchsz > 1 (this comment is not from me, so why cann't be changed?)
+        # if bs > 1, it can be n_direct * n_ens * bs, what's the problem
+        # we have to keep the consistancy in dimensions right? among z0, xt...
         
-        # from me: ok, question time, could you explain why algorithm 3 also mentions about ar?
-        # and on the basis of the comment above, there should be code for ar, right?
-        class_labels = previous.repeat_interleave(n_direct * n_ens, dim=0) # Can not be changed if batchsz > 1
+        # question about initialzation of class_labels: wtf is repeat_interleave
+        # but anyway class_labels should keep the same dimension with data sample right?
+        # previous: (1, 12, 32, 64)
+        # repeat_interleave(4*50=200) → (200, 12, 32, 64)
+        # Unlike .repeat() which does [A,A,A,B,B,B], 
+        # repeat_interleave does [A,B,A,B,A,B] — it interleaves. 
+        # Here dim=0 means each sample gets repeated 200 times consecutively. 
+
+        # The model needs one conditioning tensor per call, 
+        # and it will call for 50 ensemble members × 4 direct lead times simultaneously, 
+        # all from the same initial condition.
 
         static_fields = class_labels[:, -num_static_fields:]
+        # shape: (200, 2, 32, 64)
+        # num_static_fields is 2, but what's the point to do this?
+        # they're geographic constants that never change
 
         latent_shape = (n_samples * n_ens, num_variables, dx, dy)
-
+        # what does n_sampels mean?
+        # the shape of latent_space(z0 in your code) should align with class_labels(xt in your code)
+        # so bs should be keep as 1
+        # it actually can be implemented easily by initializing the dataloader as bs=1
+    
         direct_time_labels_repeated = direct_time_labels.repeat(n_ens * n_samples) # Can not be changed if n_direct > 1
+        # The sampler processes 200 samples simultaneously. 
+        # Each sample needs its own time label scalar. 
+        # 50 ensemble members all share the same 4 time labels, just repeated.
 
         # Test
+        # what n_times and num_variables mean?
+        # line 168 see the def of n_times
+        # num_variables should only exists in Martin's work
         predicted_combined = torch.zeros((n_samples, n_ens, n_times, num_variables, dx, dy), device=device)
 
+        
         for i in tqdm(range(n_iter)):
             # Control the correlation of the noise with alpha (Algorithm 2)
             latents = get_latents(latent_shape, n_direct, alpha=alpha)
             
             if deterministic:
+                # why don't you just input previsous man?
+                # they look no difference
+                # ok, now i know it is an iterative variable used to perform ar
                 predicted = model(class_labels, direct_time_labels_repeated / max_horizon)
             else:
-                # from claude: you call your sampler without time_labels. The fourth argument here —
-                # direct_time_labels_repeated / max_horizon — is the normalized lead time passed into every net() call
-                # inside the ODE loop so the network knows which lead it is denoising toward.
-                # from me: now I have, invalid comment
                 predicted = sampler_fn(model, latents, class_labels, direct_time_labels_repeated / max_horizon,
                                     sigma_max=80, sigma_min=0.03, rho=7, num_steps=20, S_churn=2.5, S_min=0.75, S_max=80, S_noise=1.05)
 
             predicted_combined[:, :, i*n_direct:(i+1)*n_direct] = predicted.view(n_samples, n_ens, n_direct, num_variables, dx, dy)
-
+            # I guess it concate all the predicted frames together, nice idea, I should do that actually
+            # but actually IDK what is it exactly doing
+            # i=0 → fills [:, :,  0: 4, ...]  = hours  6, 12, 18, 24
+            # i=1 → fills [:, :,  4: 8, ...]  = hours 30, 36, 42, 48
+            # ...
+            # i=9 → fills [:, :, 36:40, ...]  = hours 234,240
+            # Pre-allocated output tensor (1, 50, 40, 5, 32, 64). 
+            # Each AR iteration contributes its 4 direct timesteps. 
+            # The trick is that all 40 output frames end up written in order without any concatenation at the end.
+            # I should use that, good one
             predicted = predicted.view(n_samples*n_ens, n_direct, num_variables, dx, dy)
             class_labels = class_labels.view(n_samples*n_ens, n_direct, n_conditions, dx, dy)[:, 0]
-            
+            # what is view function?
+            # create a new view of the data without copying
+            # use to reshape here
+
             initial_condition = predicted[:,-1]
             
             idx = np.argwhere(direct_time_labels.cpu().numpy() == - conditioning_times[1])
+            
             
             if idx.size == 0:
                 raise ValueError(f"Previous timestep {-conditioning_times[1]} not found in forecasting times {direct_time_labels.cpu().numpy()}")
             idx = idx[0][0] + 1
            
             earlier_initial_condition = class_labels[:,:num_variables] if idx == len(direct_time_labels) else predicted[:,-(idx+1)]
+            # where is the earlier initial condition comes from Idk, it seems complicated
 
             class_labels = torch.cat((initial_condition, earlier_initial_condition), dim=1).repeat_interleave(n_direct, dim=0)
-            
+            # ↑ this is the AR part: feed prediction back as conditioning
+            # It seems like the ar forecasting window is not one?
+
+            # Martin's model conditions on two past states: 
+            # conditioning_times = [0, -24] — meaning x(t) AND x(t-24h). 
+            # So the AR update must supply both
+
             if num_static_fields != 0:
                 class_labels = torch.cat((class_labels, static_fields), dim=1)
+                # add the unchanged thing back
+                # irrelevant to yours
 
         # Save predictions incrementally to zarr file
         predictions[start_idx:start_idx + n_samples, :, :, :, :, :] = renormalize(predicted_combined).view(n_samples, n_ens, n_times, num_variables, dx, dy).cpu().numpy()

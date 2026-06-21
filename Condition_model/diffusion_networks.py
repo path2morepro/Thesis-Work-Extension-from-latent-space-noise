@@ -335,10 +335,7 @@ class SongUNet(torch.nn.Module):
         )
 
         # Mapping.
-        # what are you mapping?
-        # and what's the output of mapping, I mean their dimension
-        # 2d->1d?
-        # it's an initialization not function 
+
         self.map_noise = PositionalEmbedding(
             num_channels=noise_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
         self.map_time = (PositionalEmbedding(num_channels=noise_channels, endpoint=True) if embedding_type ==

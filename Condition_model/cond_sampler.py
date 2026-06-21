@@ -84,6 +84,7 @@ class CondSampler:
     def sample(self, z0, x_t, lead_times=None):
         """
         Forward ODE: latent noise z0 → physical forecast x_{t+1}, conditioned on x_t.
+        As we see here, sampler can actually support predict batch.
 
         Args:
             z0  : initial Gaussian noise, shape (B, 2, H, W)
