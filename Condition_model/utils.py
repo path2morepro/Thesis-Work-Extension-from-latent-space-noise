@@ -78,7 +78,7 @@ def compute_crps(
 
 def compute_ssr(preds: np.ndarray, rmse: np.ndarray) -> np.ndarray:
     N = preds.shape[1]  # ensemble size
-    spread = preds.std(axis=1, ddof=1).mean(axis=(1,2,3))   # unbiased
+    spread = np.sqrt(preds.var(axis=1, ddof=1).mean(axis=(1,2,3)))  # unbiased
     return np.sqrt((N+1)/N) * spread / (rmse + 1e-8)        # with correction
 
 
@@ -160,3 +160,62 @@ def visualize_results(results, out_dir='../Visual/'):
         anim.save(str(path), writer='pillow', fps=5)
         plt.close(fig)
         print(f'Saved → {path}')
+
+
+
+def compute_metrics(results):
+    max_frames = max(p.shape[0] * p.shape[1] for p, t in results)
+    n_ens      = results[0][0].shape[2]
+
+    rmse_sum   = np.zeros(max_frames)
+    spread_sum = np.zeros(max_frames)
+    crps_sum   = np.zeros(max_frames)
+    counts     = np.zeros(max_frames)
+
+    for predicts, truth in results:
+        n_steps, n_lead = predicts.shape[:2]
+        T = n_steps * n_lead
+        p = predicts.reshape(T, *predicts.shape[2:]).numpy()
+        t = truth.reshape(T, *truth.shape[2:]).numpy()
+
+        rmse_sum[:T]   += compute_rmse(p.mean(axis=1), t)
+        spread_sum[:T] += np.sqrt(p.var(axis=1, ddof=1).mean(axis=(1,2,3)))
+        crps_sum[:T]   += compute_crps(p, t)
+        counts[:T]     += 1
+
+    rmse_mean   = rmse_sum   / counts
+    spread_mean = spread_sum / counts
+    crps_mean   = crps_sum   / counts
+    ssr         = np.sqrt((n_ens + 1) / n_ens) * spread_mean / (rmse_mean + 1e-8)
+
+    return {
+        'rmse':       rmse_mean,
+        'crps':       crps_mean,
+        'ssr':        ssr,
+        'counts':     counts,
+        'lead_times': np.arange(1, max_frames + 1),
+    }
+
+
+def plot_metrics(metrics, out_path='../Performance/metrics.png'):
+    lead_times = metrics['lead_times']
+    counts     = metrics['counts']
+    valid      = counts > 0
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+
+    axes[0].plot(lead_times[valid], metrics['rmse'][valid], color='steelblue')
+    axes[0].set_title('RMSE'); axes[0].set_xlabel('Lead time (h)'); axes[0].grid(alpha=0.3)
+
+    axes[1].plot(lead_times[valid], metrics['crps'][valid], color='darkorange')
+    axes[1].set_title('CRPS'); axes[1].set_xlabel('Lead time (h)'); axes[1].grid(alpha=0.3)
+
+    axes[2].plot(lead_times[valid], metrics['ssr'][valid], color='seagreen')
+    axes[2].axhline(1.0, color='red', linestyle='--', lw=1, label='ideal')
+    axes[2].set_title('SSR'); axes[2].set_xlabel('Lead time (h)')
+    axes[2].legend(); axes[2].grid(alpha=0.3)
+
+    plt.suptitle(f'Metrics over lead time — {int(counts[0])} samples', fontsize=11)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.show()

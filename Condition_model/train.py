@@ -67,16 +67,16 @@ FILTERS        = 32          # small for quick sanity runs; use 64 for real trai
 LABEL_DROPOUT  = 0.0         # CFG not used — must be 0.0
 
 # ── training ──────────────────────────────────────────────────────────────
-BATCH_SIZE   = 16
-NUM_EPOCHS   = 300
+BATCH_SIZE   = 64
+NUM_EPOCHS   = 500
 LR           = 1e-3
 WEIGHT_DECAY = 1e-4
 WARMUP_ITERS = 500
 
 # ── misc ──────────────────────────────────────────────────────────────────
-SAVE_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_test.pth'
-LOG_PATH  = ROOT / 'models' / 'randomAnchor_n_24pred_test_training_log.csv'
-PLOT_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_test_loss_curves.png'
+SAVE_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_formal.pth'
+LOG_PATH  = ROOT / 'models' / 'randomAnchor_n_24pred_formal_training_log.csv'
+PLOT_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_formal_loss_curves.png'
 
 
 # ============================================================================
@@ -123,14 +123,14 @@ def build_datasets():
 def build_model(device):
     """
     SongUNet with in_channels=4: [z_s (2ch)] cat [x_t (2ch)].
-    time_emb=1 enables the lead-time Fourier embedding (map_time).
+    time_emb=1 enables the lead-time positional embedding (map_time).
     label_dropout=0.0: no CFG dropout.
     """
     model = SongUNet(
         img_resolution     = IMG_RESOLUTION,
         in_channels        = IMG_CHANNELS * 2,  # 2 (z_s) + 2 (x_t conditioning)
         out_channels       = IMG_CHANNELS,
-        embedding_type     = 'fourier',
+        embedding_type     = 'positional',
         encoder_type       = 'residual',
         decoder_type       = 'standard',
         channel_mult_noise = 2,

@@ -80,7 +80,7 @@ def forecast(
         traj          = ds.data[traj_idx]
         anchor_t      = anchor_t.item()
 
-        n_ar = (frames_per_traj - anchor_t - max_lead) // max_lead
+        n_ar = (frames_per_traj - 1 - anchor_t - max_lead) // max_lead
 
         predicts = torch.zeros(n_ar + 1, n_direct_lead, ens, levels, H, W)
         truth    = torch.zeros(n_ar + 1, n_direct_lead,      levels, H, W)
@@ -95,20 +95,19 @@ def forecast(
 
         truth[0] = target.squeeze(0)
 
-        targets = target.squeeze(0).repeat_interleave(ens * bs, dim=0)
-        assert targets.shape == (ens * bs * n_direct_lead, levels, H, W), \
-            f"targets shape wrong: {targets.shape}"
-
         for i in range(n_ar+1):
             latent = get_latents((ens * bs, levels, H, W), n_direct_lead, alpha=alpha, device=device)
             pred   = sampler.sample(z0=latent, x_t=initials, lead_times=time_labels)
-            pred   = pred.reshape(n_direct_lead, ens * bs, levels, H, W)
+            # seemingly reshape itself cannot revert pred properly
+            # but I don't know what this for either
+            pred = pred.reshape(ens, n_direct_lead, levels, H, W).transpose(0, 1).contiguous()
             predicts[i] = pred
+   
 
             if i > 0:
                 truth[i] = torch.stack([
                     traj[anchor_t + i * max_lead + k]
-                    for k in range(max_lead)
+                    for k in range(1, max_lead+1)
                 ])  # (n_direct_lead, levels, H, W)
 
             initials = pred[-1].repeat_interleave(n_direct_lead, dim=0)
