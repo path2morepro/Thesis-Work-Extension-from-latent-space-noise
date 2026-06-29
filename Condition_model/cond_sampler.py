@@ -48,7 +48,7 @@ class CondSampler:
             img_resolution=64,
             in_channels=4,       # 2 ch (z_s) + 2 ch (x_t conditioning)
             out_channels=2,
-            embedding_type='fourier',
+            embedding_type='positional',
             encoder_type='residual',
             decoder_type='standard',
             channel_mult_noise=2,
@@ -168,3 +168,5 @@ class CondSampler:
     #             zt = zt + dz + dW
 
     #     return zt.cpu()
+
+

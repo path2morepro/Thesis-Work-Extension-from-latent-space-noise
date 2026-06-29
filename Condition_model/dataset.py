@@ -57,7 +57,7 @@ class SQGLeadTimeDataset(Dataset):
         ]
         
         self.forecasting_leads = list(range(max_lead+1)) # 0...24
-   
+        self.max_frames = max_frames
         self.max_lead  = max_lead
         self.random_lead_time = random_lead_time
         # forecasting_leads should be fixed

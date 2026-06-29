@@ -6,19 +6,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm.asyncio import tqdm
+import gc
 
 THIS_DIR = Path(__file__).resolve().parent
 if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
 from cond_sampler import CondSampler
+from train import SAVE_PATH
 from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
 from torch.utils.data import Dataset, Subset
 from torch.utils.data import DataLoader
-from utils import compute_rmse, compute_crps, compute_ssr, print_metrics
-
-DEFAULT_MODEL_PATH = THIS_DIR.parent / 'models' / 'best_model_conditional.pth'
-
+from utils import visualize_results, compute_metrics, plot_metrics
 
 
 # capsulate the forecasting as a function
@@ -140,3 +139,25 @@ def get_latents(latent_shape, n_direct, alpha=1.0, device='cpu'):
     z = z.transpose(0, 1).reshape(n_direct * B, C, H, W) # Transposing makes sure the order is preserved.
 
     return z
+
+
+if __name__ == '__main__':
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    sampler = CondSampler(model_path=SAVE_PATH, device=device, steps=100, eps=None)
+    # test code
+    results = forecast(sampler, eval_traj_num=3, ens=5)
+
+    # results = forecast(sampler, eval_traj_num=50, ens=20)
+    visualize_results(results)
+    metrics = compute_metrics(results)
+    plot_metrics(metrics)
+
+    # Comparsion results using uncorrelated noise and fixed noise as the input
+    # uncorrelated = forecast(sampler, eval_traj_num=3, alpha=0, eval_traj_num=50, ens=20)
+    # fixed = forecast(sampler, eval_traj_num=3, alpha=1, eval_traj_num=50, ens=20)
+    # visualize_results(uncorrelated, out_dir='../Visual/uncorrelated')
+    # visualize_results(fixed, out_dir='../Visual/fixed')
+
+
+
