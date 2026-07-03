@@ -4,11 +4,6 @@ from pathlib import Path
 
 import torch
 from tqdm import tqdm
-
-THIS_DIR = Path(__file__).resolve().parent
-if str(THIS_DIR) not in sys.path:
-    sys.path.insert(0, str(THIS_DIR))
-
 from diffusion_networks import SongUNet
 
 
@@ -29,8 +24,6 @@ class CondSampler:
         device,
         steps=100,
         invert_steps=100,
-        eps=None,
-        invert_eps=None,
         debug=False,
     ):
         """
@@ -39,9 +32,6 @@ class CondSampler:
             device       : torch device
             steps        : Euler steps for sampling (forward ODE)
             invert_steps : Euler steps for inversion (backward ODE)
-            eps          : callable t -> float, diffusion coefficient for stochastic
-                           sampling; None or lambda t: 0 gives deterministic ODE
-            invert_eps   : same but for inversion; None gives deterministic inversion
             debug        : if True, sample() returns full trajectory tensor
         """
         self.model = SongUNet(
@@ -70,8 +60,6 @@ class CondSampler:
         self.device = device
         self.steps = steps
         self.invert_steps = invert_steps
-        self.eps = eps if eps is not None else lambda t: 0.0
-        self.invert_eps = invert_eps if invert_eps is not None else lambda t: 0.0
         self.debug = debug
 
     def _score(self, t_val, b, zt):
@@ -83,16 +71,10 @@ class CondSampler:
 
     def sample(self, z0, x_t, lead_times=None):
         """
-        Forward ODE: latent noise z0 → physical forecast x_{t+1}, conditioned on x_t.
-        As we see here, sampler can actually support predict batch.
-
-        Args:
-            z0  : initial Gaussian noise, shape (B, 2, H, W)
-            x_t : conditioning previous state, shape (B, 2, H, W)
-
-        Returns:
-            predicted x_{t+1} on CPU, shape (B, 2, H, W).
-            If debug=True, also returns trajectory tensor (B, steps+1, 2, H, W).
+        input: 
+        z0: noise
+        xt: initial state
+        lead_times: lead_times
         """
         B = z0.shape[0]
         dt = 1.0 / self.steps
@@ -109,20 +91,14 @@ class CondSampler:
             enum = tqdm(ts, desc='sample') if self.debug else ts
             for t in enum:
                 t_val = t.item()
-                eps_t = float(self.eps(t_val))
 
                 s_vec = torch.full((B,), t_val, device=self.device)
                 # lead_times is the (B,) lead-time condition; it is fixed for the
                 # whole ODE integration (only the interpolant time s_vec changes).
                 b = self.model(zt, s_vec, class_labels=x_t, time_labels=lead_times)
 
-
-                score = self._score(t_val, b, zt) if eps_t > 0 else 0.0  
-
-                dz = (b + score * eps_t) * dt
-                dW = (torch.randn_like(zt) * math.sqrt(2.0 * dt * eps_t) # fabs(dt)
-                      if eps_t > 0 else 0.0)
-                zt = zt + dz + dW
+                dz = b * dt
+                zt = zt + dz
 
                 if self.debug:
                     trajectory.append(zt.clone().cpu())
@@ -132,41 +108,26 @@ class CondSampler:
             return result, torch.stack(trajectory, dim=1)
         return result
 
-    # def invert(self, x_t1, x_t):
-    #     """
-    #     I even don't think I need this function
-    #     Reverse ODE: physical field x_{t+1} → latent noise z0, conditioned on x_t.
+    def invert(self, xtt, x_t, lead_times=None):
+        """
+        Invert function is totally deterministic
+        """
+        B = xtt.shape[0]
+        dt = -1.0 / self.invert_steps
+        ts = torch.linspace(1, 0, self.invert_steps + 1, device=self.device)[:-1]
 
-    #     Args:
-    #         x_t1 : next state to invert, shape (B, 2, H, W)
-    #         x_t  : conditioning previous state, shape (B, 2, H, W)
+        zt = xtt.to(self.device)
+        x_t = x_t.to(self.device)
 
-    #     Returns:
-    #         latent noise z0 on CPU, shape (B, 2, H, W)
-    #     """
-    #     B = x_t1.shape[0]
-    #     dt = -1.0 / self.invert_steps
-    #     ts = torch.linspace(1, 0, self.invert_steps + 1, device=self.device)[:-1]
+        with torch.no_grad():
+            enum = tqdm(ts, desc='invert') if self.debug else ts
+            for t in enum:
+                t_val = t.item()
+                s_vec = torch.full((B,), t_val, device=self.device)
+                b = self.model(zt, s_vec, class_labels=x_t, time_labels=lead_times)
+                dz = b * dt
+                zt = zt + dz
 
-    #     zt = x_t1.to(self.device)
-    #     x_t = x_t.to(self.device)
-
-    #     with torch.no_grad():
-    #         enum = tqdm(ts, desc='invert') if self.debug else ts
-    #         for t in enum:
-    #             t_val = t.item()
-    #             eps_t = float(self.invert_eps(t_val))
-
-    #             s_vec = torch.full((B,), t_val, device=self.device)
-    #             b = self.model(zt, s_vec, class_labels=x_t)
-
-    #             score = self._score(t_val, b, zt) if eps_t > 0 else 0.0
-
-    #             dz = (b - score * eps_t) * dt
-    #             dW = (torch.randn_like(zt) * math.sqrt(2.0 * abs(dt) * eps_t)
-    #                   if eps_t > 0 else 0.0)
-    #             zt = zt + dz + dW
-
-    #     return zt.cpu()
+        return zt.cpu()
 
 

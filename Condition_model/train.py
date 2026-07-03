@@ -74,6 +74,8 @@ WEIGHT_DECAY = 1e-4
 WARMUP_ITERS = 500
 
 # ── misc ──────────────────────────────────────────────────────────────────
+# Path management: 
+# all the model path should import from here
 SAVE_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_formal.pth'
 LOG_PATH  = ROOT / 'models' / 'randomAnchor_n_24pred_formal_training_log.csv'
 PLOT_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_formal_loss_curves.png'

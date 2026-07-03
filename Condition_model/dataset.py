@@ -12,8 +12,8 @@ THIS_DIR     = Path(__file__).resolve().parent
 PROJECT_ROOT = THIS_DIR.parent
 
 # Convenience paths — pass either as data_dir to SQGPairDataset
-DATA_100 = PROJECT_ROOT / "data"           # (100 trajectories)
-DATA_500 = PROJECT_ROOT / "data_500traj"     #   (500 trajectories)
+DATA_100 = PROJECT_ROOT / "data" / "data_100traj"          # (100 trajectories)
+DATA_500 = PROJECT_ROOT /"data" / "data_500traj"     #   (500 trajectories)
 
 
 class SQGLeadTimeDataset(Dataset):
@@ -137,3 +137,6 @@ class SQGLeadTimeDataset(Dataset):
             )                                        # (max_lead,) forecast [1, 24] hour
 
             return initial, target, time_labels, torch.tensor(traj_idx, dtype=torch.long), torch.tensor(t, dtype=torch.long)
+        
+
+

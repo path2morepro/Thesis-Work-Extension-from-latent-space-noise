@@ -8,10 +8,6 @@ import torch
 from tqdm.asyncio import tqdm
 import gc
 
-THIS_DIR = Path(__file__).resolve().parent
-if str(THIS_DIR) not in sys.path:
-    sys.path.insert(0, str(THIS_DIR))
-
 from cond_sampler import CondSampler
 from train import SAVE_PATH
 from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
@@ -24,7 +20,7 @@ from utils import visualize_results, compute_metrics, plot_metrics
 # here i input 5 data samples, but here only one forecasting result returns
 def forecast(
     sampler,
-    data_dir=DATA_100,
+    data_dir=DATA_500,
     split='val',
     eval_traj_num=5,            # controls eval dataset size
     ens=5,
@@ -141,23 +137,53 @@ def get_latents(latent_shape, n_direct, alpha=1.0, device='cpu'):
     return z
 
 
-if __name__ == '__main__':
+def perform_forecasting(test_pl=False, eval_traj_num=100, ens=20, comparison=False, alpha=0.5):
+    '''
+    test_pl: Valid the pipeline on the local machine, NOTE this parameter is default as true
+    eval_traj_num: The number of predicted trajectories 
+    ens: The number of ensemble for each trajectory
+    comparison: Forecast using fixed noise and uncorrelated noise as well
+    alpha: The default parameter controling the correlation over noise
+    '''
 
+    # TODO: It would be better if this line can be reused
+    save_dir = DATA_500.parent / f"predit_alpha={alpha}"
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     sampler = CondSampler(model_path=SAVE_PATH, device=device, steps=100, eps=None)
-    # test code
-    results = forecast(sampler, eval_traj_num=3, ens=5)
+    if test_pl:
+        eval_traj_num = 3
+        ens = 5
 
-    # results = forecast(sampler, eval_traj_num=50, ens=20)
+    results = forecast(sampler, eval_traj_num=eval_traj_num, ens=ens, alpha=alpha)
+    # store the trajectories
+    save_dir.mkdir(parents=True, exist_ok=True)
+    # .npy only — these are forecast outputs, not raw SQG generation data,
+    # so there's no need for the .nc intermediate format used in sqg_generate.py.
+    for i, (predicts, truth) in enumerate(results):
+        np.save(save_dir / f"sample{i:02d}_predicts.npy", predicts.numpy())
+        np.save(save_dir / f"sample{i:02d}_truth.npy",    truth.numpy())
+
+    print(f"Saved {len(results)} samples to {save_dir}")
     visualize_results(results)
     metrics = compute_metrics(results)
     plot_metrics(metrics)
 
-    # Comparsion results using uncorrelated noise and fixed noise as the input
-    # uncorrelated = forecast(sampler, eval_traj_num=3, alpha=0, eval_traj_num=50, ens=20)
-    # fixed = forecast(sampler, eval_traj_num=3, alpha=1, eval_traj_num=50, ens=20)
-    # visualize_results(uncorrelated, out_dir='../Visual/uncorrelated')
-    # visualize_results(fixed, out_dir='../Visual/fixed')
+    if comparison:
+        # Comparsion results using uncorrelated noise and fixed noise as the input
+        uncorrelated = forecast(sampler, eval_traj_num=eval_traj_num, ens=ens, alpha=0)
+        fixed = forecast(sampler, eval_traj_num=eval_traj_num, ens=ens, alpha=1)
+
+        visualize_results(uncorrelated, out_dir='../Visual/uncorrelated')
+        visualize_results(fixed, out_dir='../Visual/fixed')
+
+        # store the trajectories
+
+if __name__ == '__main__':
+    # TODO: Pass the parameters calling in terminal
+    perform_forecasting()
+
+
+
 
 
 

@@ -1,15 +1,3 @@
-"""
-Conditional flow-matching loss for p(x_{t+1} | x_t).
-
-Interpolant:      z_s = (1 - s) * z0 + s * x_{t+1},  s ~ Uniform[0, 1], z0 ~ N(0, I)
-Velocity target:  dot(z_s) = x_{t+1} - z0   (constant along the linear path)
-Loss:             E[|| b_hat(z_s, s, x_t) - (x_{t+1} - z0) ||^2]
-
-The formula is identical to the unconditional case — the only difference is
-that the model also receives x_t as spatial conditioning (class_labels) and the
-lead time as a scalar condition (time_labels).
-"""
-
 import torch
 
 
