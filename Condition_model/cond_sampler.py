@@ -24,7 +24,7 @@ class CondSampler:
         device,
         steps=100,
         invert_steps=100,
-        debug=False,
+        debug=False
     ):
         """
         Args:
@@ -108,26 +108,5 @@ class CondSampler:
             return result, torch.stack(trajectory, dim=1)
         return result
 
-    def invert(self, xtt, x_t, lead_times=None):
-        """
-        Invert function is totally deterministic
-        """
-        B = xtt.shape[0]
-        dt = -1.0 / self.invert_steps
-        ts = torch.linspace(1, 0, self.invert_steps + 1, device=self.device)[:-1]
-
-        zt = xtt.to(self.device)
-        x_t = x_t.to(self.device)
-
-        with torch.no_grad():
-            enum = tqdm(ts, desc='invert') if self.debug else ts
-            for t in enum:
-                t_val = t.item()
-                s_vec = torch.full((B,), t_val, device=self.device)
-                b = self.model(zt, s_vec, class_labels=x_t, time_labels=lead_times)
-                dz = b * dt
-                zt = zt + dz
-
-        return zt.cpu()
 
 

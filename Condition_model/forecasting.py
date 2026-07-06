@@ -10,7 +10,7 @@ import gc
 
 from cond_sampler import CondSampler
 from train import SAVE_PATH
-from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
+from dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
 from torch.utils.data import Dataset, Subset
 from torch.utils.data import DataLoader
 from utils import visualize_results, compute_metrics, plot_metrics
@@ -147,9 +147,9 @@ def perform_forecasting(test_pl=False, eval_traj_num=100, ens=20, comparison=Fal
     '''
 
     # TODO: It would be better if this line can be reused
-    save_dir = DATA_500.parent / f"predit_alpha={alpha}"
+    save_dir = DATA_PATH / f"predit_alpha={alpha}"
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    sampler = CondSampler(model_path=SAVE_PATH, device=device, steps=100, eps=None)
+    sampler = CondSampler(model_path=SAVE_PATH, device=device, steps=100)
     if test_pl:
         eval_traj_num = 3
         ens = 5

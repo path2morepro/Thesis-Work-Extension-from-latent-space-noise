@@ -10,6 +10,7 @@ from natsort import natsorted
 
 THIS_DIR     = Path(__file__).resolve().parent
 PROJECT_ROOT = THIS_DIR.parent
+DATA_PATH = PROJECT_ROOT / "data"
 
 # Convenience paths — pass either as data_dir to SQGPairDataset
 DATA_100 = PROJECT_ROOT / "data" / "data_100traj"          # (100 trajectories)
@@ -137,6 +138,5 @@ class SQGLeadTimeDataset(Dataset):
             )                                        # (max_lead,) forecast [1, 24] hour
 
             return initial, target, time_labels, torch.tensor(traj_idx, dtype=torch.long), torch.tensor(t, dtype=torch.long)
-        
 
 
