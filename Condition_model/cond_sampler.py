@@ -69,7 +69,7 @@ class CondSampler:
             return (t_val * b - zt) / beta
         return torch.zeros_like(b)
 
-    def sample(self, z0, x_t, lead_times=None):
+    def sample(self, z0, x_t, lead_times=None, invert=False):
         """
         input: 
         z0: noise
@@ -78,7 +78,10 @@ class CondSampler:
         """
         B = z0.shape[0]
         dt = 1.0 / self.steps
-        ts = torch.linspace(0, 1, self.steps + 1, device=self.device)[:-1]
+        if invert:
+            ts = torch.linspace(1, 0, self.steps + 1, device=self.device)[:-1]
+        else:
+            ts = torch.linspace(0, 1, self.steps + 1, device=self.device)[:-1]
 
         zt = z0.to(self.device)
         x_t = x_t.to(self.device)

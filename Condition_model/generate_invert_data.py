@@ -46,7 +46,7 @@ def perform_invert(
         lead_time = lead_time.reshape(bs*max_lead, ) # I don't know whether we need to transpose
         target = target.reshape(bs*max_lead, levels, H, W) # same as above
 
-        batch_inverted = sampler.sample(z0=target, x_t=initial, lead_times=lead_time)
+        batch_inverted = sampler.sample(z0=target, x_t=initial, lead_times=lead_time, invert=True)
         # batch_inverted_data (bs*max_lead, levels, H, W)
         batch_inverted = batch_inverted.reshape(bs, max_lead, levels, H, W).numpy()
         batch_no += 1
