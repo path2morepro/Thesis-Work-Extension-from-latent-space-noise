@@ -29,12 +29,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-ROOT = Path('..').resolve()          # repo root
-sys.path.insert(0, str(ROOT / 'Condition_model'))
+from .diffusion_networks import SongUNet
+from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500
+from .loss import flow_matching_loss
 
-from diffusion_networks import SongUNet
-from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
-from loss import flow_matching_loss
+ROOT = Path(__file__).resolve().parent.parent   # project root (Thesis/)
 
 
 """

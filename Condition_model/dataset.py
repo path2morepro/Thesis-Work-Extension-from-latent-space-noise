@@ -139,4 +139,24 @@ class SQGLeadTimeDataset(Dataset):
 
             return initial, target, time_labels, torch.tensor(traj_idx, dtype=torch.long), torch.tensor(t, dtype=torch.long)
 
+class SQGDataset(Dataset):
+    def __init__(self, data_path, mean=0, std=2660):
+        """
+        Args:
+            data_path (str): Path to data file.
+            mean, std: normalization stats.
+        """
+        self.mean = mean
+        self.std = std
+        files = natsorted(data_path.glob('*.npy'))
+        self.data = [
+            torch.tensor(np.load(f).astype(np.float32) / std)
+            for f in files
+        ]
 
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        x = (self.data[idx] - self.mean) / self.std
+        return x

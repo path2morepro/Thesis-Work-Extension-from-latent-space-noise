@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 from tqdm import tqdm
-from diffusion_networks import SongUNet
+from .diffusion_networks import SongUNet
 
 
 class CondSampler:
