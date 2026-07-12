@@ -2,25 +2,25 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm import tqdm
-
-from cond_sampler import CondSampler
-from train import SAVE_PATH
-from dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
 from torch.utils.data import DataLoader
+
+from .cond_sampler import CondSampler
+from .train import SAVE_PATH
+from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
+
 
 
 # capsulate the forecasting as a function
 # here i input 5 data samples, but here only one forecasting result returns
 def perform_invert(
     data_dir=DATA_500,
-    invert_traj_num=400,
-    parallel_trajs = 40       
+    invert_traj_num=100,
+    parallel_trajs = 10,
+    steps = 300       
 ):
 
     # there are parallel trajs for each batch
     bs, max_lead, levels, H, W = (parallel_trajs, 24, 2, 64, 64)
-    save_dir = DATA_PATH / 'invert'
-    save_dir.mkdir(parents=True, exist_ok=True)
     # the dataset is used to extract the target and the condition
     # this would return a sampled trajectory
     target_dataset = SQGLeadTimeDataset(
@@ -34,7 +34,9 @@ def perform_invert(
 
     loader = DataLoader(target_dataset, batch_size=bs, shuffle=False)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    sampler = CondSampler(model_path=SAVE_PATH, device=device, steps=100)
+    sampler = CondSampler(model_path=SAVE_PATH, device=device, steps=steps)
+    save_dir = DATA_PATH / f'invert_steps={steps}'
+    save_dir.mkdir(parents=True, exist_ok=True)
 
     batch_no = 0
 

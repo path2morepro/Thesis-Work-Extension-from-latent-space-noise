@@ -1,22 +1,3 @@
-"""
-Conditional Flow-Matching Training.
-
-Trains a conditional diffusion model to learn p(x_{t+1} | x_t).
-
-What changes from the unconditional model:
-- Dataset returns consecutive pairs (x_t, x_{t+1}) plus a lead-time label.
-- `SongUNet` uses `in_channels=4` (2 channels for the noisy z_s + 2 channels
-  for the conditioning x_t concatenated spatially).
-- x_t is passed as `class_labels` — concatenated inside `SongUNet.forward`
-  before the encoder; the lead time is passed as `time_labels`.
-- Training target is x_{t+1} - z_0 (velocity), same formula as before.
-- `label_dropout=0.1` enables classifier-free guidance at inference if needed.
-
-Everything else (loss structure, optimiser) is identical to the unconditional case.
-
-Run:  python train.py
-"""
-
 import csv
 import sys
 from pathlib import Path
@@ -29,12 +10,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-ROOT = Path('..').resolve()          # repo root
-sys.path.insert(0, str(ROOT / 'Condition_model'))
-
-from diffusion_networks import SongUNet
-from dataset import SQGLeadTimeDataset, DATA_100, DATA_500
-from loss import flow_matching_loss
+from .diffusion_networks import SongUNet
+from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500
+from .loss import flow_matching_loss
 
 
 """
@@ -76,6 +54,7 @@ WARMUP_ITERS = 500
 # ── misc ──────────────────────────────────────────────────────────────────
 # Path management: 
 # all the model path should import from here
+ROOT = Path(__file__).resolve().parent.parent
 SAVE_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_formal.pth'
 LOG_PATH  = ROOT / 'models' / 'randomAnchor_n_24pred_formal_training_log.csv'
 PLOT_PATH = ROOT / 'models' / 'randomAnchor_n_24pred_formal_loss_curves.png'

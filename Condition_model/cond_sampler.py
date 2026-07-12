@@ -4,7 +4,7 @@ from pathlib import Path
 
 import torch
 from tqdm import tqdm
-from diffusion_networks import SongUNet
+from .diffusion_networks import SongUNet
 
 
 class CondSampler:
@@ -79,7 +79,11 @@ class CondSampler:
         B = z0.shape[0]
         dt = 1.0 / self.steps
         if invert:
+            # Backward ODE: visit s from 1→0 AND step in the -s direction.
+            # Reversing only the schedule (not the step sign) still integrates
+            # forward, mapping data → ~(2*x1 - z0) (data-like) instead of → noise.
             ts = torch.linspace(1, 0, self.steps + 1, device=self.device)[:-1]
+            dt = -dt
         else:
             ts = torch.linspace(0, 1, self.steps + 1, device=self.device)[:-1]
 
