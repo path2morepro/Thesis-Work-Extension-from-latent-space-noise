@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
-from .cond_sampler import CondSampler
+from .samplers import CondSampler
 from .train import SAVE_PATH
 from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
 

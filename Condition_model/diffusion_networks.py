@@ -349,15 +349,10 @@ class SongUNet(torch.nn.Module):
         self.map_layer1 = Linear(
             in_features=emb_channels, out_features=emb_channels, **init)
 
-        # Encoder.
-        # seems like you use attention here
-        # for what?
         self.enc = torch.nn.ModuleDict()
         cout = in_channels
         caux = in_channels
-        # what's channel_mult?
-        # level decides the depth of U-net
-        # mult decides how many channels of output after each layer
+
         for level, mult in enumerate(channel_mult):
             res = img_resolution >> level
             if level == 0:
@@ -393,7 +388,7 @@ class SongUNet(torch.nn.Module):
         skips = [block.out_channels for name,
                  block in self.enc.items() if 'aux' not in name]
 
-        # Decoder.
+     
         self.dec = torch.nn.ModuleDict()
         for level, mult in reversed(list(enumerate(channel_mult))):
             res = img_resolution >> level
@@ -422,8 +417,8 @@ class SongUNet(torch.nn.Module):
 
     def forward(self, x, noise_labels, class_labels=None, time_labels=None, augment_labels=None):
         # noise labels: sigma(t)
-        # class_labels: which concat it should do, haven't figured out
-        # time_labels: time condition, haven't figured out
+        # class_labels: in my workflow it would be the initial state on condition
+        # time_labels: time condition
         # augment_labels： something about data augment
 
         # Mapping.

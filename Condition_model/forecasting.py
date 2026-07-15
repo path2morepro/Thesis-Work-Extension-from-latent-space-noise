@@ -7,7 +7,7 @@ from tqdm.asyncio import tqdm
 from torch.utils.data import Dataset, Subset
 from torch.utils.data import DataLoader
 
-from .cond_sampler import CondSampler
+from .samplers import CondSampler
 from .train import SAVE_PATH
 from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
 from .utils import visualize_results, compute_metrics, plot_metrics
