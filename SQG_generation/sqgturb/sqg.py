@@ -266,6 +266,8 @@ class SQG:
         return dpvspecdt
 
     def timestep(self):
+        
+        # FromTrace: This is the integration algorithm
         # update pv using 4th order runge-kutta time step with
         # implicit "integrating factor" treatment of hyperdiffusion.
         self.rkstep = 0
@@ -277,5 +279,8 @@ class SQG:
         self.rkstep = 3
         k4 = self.dt * self.gettend(self.pvspec + k3)
         pvspecnew = self.pvspec + (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+        # FromTrace: Convert the deterministic PDE into stochastic
+        # FromTrace: I haven't define any noise amplitude tho.
+        # pvspecnew += np.random.randn(*pvspecnew.shape)
         self.pvspec = self.hyperdiff * pvspecnew
         self.t += self.dt  # increment time

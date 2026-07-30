@@ -15,8 +15,8 @@ from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
 def perform_invert(
     data_dir=DATA_500,
     invert_traj_num=100,
-    parallel_trajs = 10,
-    steps = 300       
+    parallel_trajs = 64,
+    steps = 1000       
 ):
 
     # there are parallel trajs for each batch

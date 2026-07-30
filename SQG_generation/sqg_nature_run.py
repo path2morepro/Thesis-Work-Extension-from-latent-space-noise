@@ -113,6 +113,7 @@ for version in tqdm(range(versions)):
     hrs = 1
     outputinterval = hrs*3600.
     tmin = 300.*86400.
+    # QUESTION: why I need an initialized tmin? I can just set it as 0
     tmax = tmin + (nframes - 1)*outputinterval
     nsteps = int(tmax/outputinterval)  # number of time steps to animate
 
