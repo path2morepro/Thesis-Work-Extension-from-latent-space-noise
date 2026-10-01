@@ -3,7 +3,8 @@ __MACOSX/
 .venv/
 *.nc
 *.pdf
-*.gif
 *.csv
 *.zarr
 .claude/
+Visual/
+report/
