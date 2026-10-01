@@ -18,14 +18,15 @@ from .utils import visualize_results, compute_metrics, plot_metrics
 def forecast(
     sampler,
     data_dir=DATA_500,
-    split='val',
     eval_traj_num=5,            # controls eval dataset size
     ens=5,
     max_lead=24,
     frames_per_traj=100,
     alpha=0.5,
     seed=42,
-    device = 'cpu'
+    device = 'cpu',
+    latent_fn=None,
+    max_ar=None,
 ):
     """
     Autoregressive ensemble forecasting.
@@ -43,6 +44,16 @@ def forecast(
         frames_per_traj : fixed trajectory length   (100)
         alpha           : noise correlation for get_latents (0=independent, 1=fixed)
         seed            : RNG seed for eval anchor sampling
+        latent_fn       : optional callable replacing get_latents, called as
+                          latent_fn(shape, n_direct, device) -> (n_direct*B, C, H, W).
+                          Must use the same batch-major / lead-minor flattening as
+                          get_latents, since time_labels is built in that order.
+                          None (default) keeps the AR(1) get_latents behaviour.
+        max_ar          : optional cap on the number of AR re-anchorings. The loop
+                          runs min(n_ar, max_ar) + 1 windows, so max_ar=0 forecasts
+                          only the first max_lead window and latent_fn is called
+                          exactly once per sample. None (default) uses the full
+                          chain that fits in the trajectory.
 
     Returns:
         predicts : torch.Tensor  (n_ar+1, n_direct_lead, ens, levels, H, W)
@@ -54,7 +65,7 @@ def forecast(
     # ── dataset and loader ───────────────────────────────────────────────────
     ds = SQGLeadTimeDataset(
         data_dir         = data_dir,
-        split            = split,
+        split            = 'val',
         random_lead_time = False,
         eval_traj_num    = eval_traj_num,
         max_lead         = max_lead,
@@ -73,6 +84,8 @@ def forecast(
         anchor_t      = anchor_t.item()
 
         n_ar = (frames_per_traj - 1 - anchor_t - max_lead) // max_lead
+        if max_ar is not None:
+            n_ar = min(n_ar, max_ar)
 
         predicts = torch.zeros(n_ar + 1, n_direct_lead, ens, levels, H, W)
         truth    = torch.zeros(n_ar + 1, n_direct_lead,      levels, H, W)
@@ -88,7 +101,10 @@ def forecast(
         truth[0] = target.squeeze(0)
 
         for i in range(n_ar+1):
-            latent = get_latents((ens * bs, levels, H, W), n_direct_lead, alpha=alpha, device=device)
+            if latent_fn is None:
+                latent = get_latents((ens * bs, levels, H, W), n_direct_lead, alpha=alpha, device=device)
+            else:
+                latent = latent_fn((ens * bs, levels, H, W), n_direct_lead, device)
             pred   = sampler.sample(z0=latent, x_t=initials, lead_times=time_labels)
             # seemingly reshape itself cannot revert pred properly
             # but I don't know what this for either
@@ -107,6 +123,68 @@ def forecast(
 
     return results
 
+def forecast_analysis(
+    sampler,
+    data_dir=DATA_500,
+    seed=42,
+    latents = None,
+    n_traj = None,
+    n_ens = None
+):
+    '''The forecasting function for evaluation learned latent space
+    which means no AR step
+    
+    Inputs:
+        latents: numpy array (N, ens, 24, 2, 64, 64)
+    Outputs:
+        preds: (N, ens, 24, 2, 64, 64)
+        truths: (N, 24, 2, 64, 64)
+    
+
+    '''
+    # the number of trajectories forecast and ensemble configuration depends on latents
+    # assume that latents (N, ens, 24, 2, 64, 64)
+    N, ens, leads, levels, H, W = latents.shape
+    assert n_traj == N, "Check if trajectories number matches with latent space data."
+    assert n_ens == ens, "Check if ensemble number mathces with latent space data."
+    assert leads == 24, "Check if leads in latent space data is 24." 
+    assert latents.is_cuda, "Run on your GPU."
+    ds = SQGLeadTimeDataset(
+        data_dir         = data_dir,
+        split            = 'val',
+        random_lead_time = False,
+        eval_traj_num = n_traj,
+        seed=seed
+    )
+    loader = DataLoader(ds, batch_size=1, shuffle=False)
+
+    i = 0
+    preds = torch.zeros((n_traj, ens, leads, levels, H, W))
+    truths = torch.zeros((n_traj, leads, levels, H, W))
+    for initial, truth, lead_time, traj_idx, anchor in tqdm(loader, total=len(loader)):
+        truths[i] = truth.squeeze(0)
+        latent = latents[i]  # latent [leads, levels, H , W]
+        traj_idx      = traj_idx.item()
+        anchor      = anchor.item()
+
+
+        time_labels = lead_time.squeeze(0).repeat(ens)
+        assert time_labels.shape == (ens * leads,), f"time_labels shape wrong: {time_labels.shape}"
+
+        initials = initial.repeat(ens * leads, 1, 1, 1)
+        assert initials.shape == (ens * leads, levels, H, W), f"initials shape wrong: {initials.shape}"
+
+        # reshape latent into (ens * leads, levels, H, W)
+        latent = latent.reshape(ens * leads, levels, H, W)        
+        pred = sampler.sample(z0=latent, x_t=initials, lead_times=time_labels)
+        pred = pred.reshape(ens, leads, levels, H, W).contiguous()
+        preds[i] = pred
+        
+        i = i + 1
+    
+    return preds.cpu().numpy(), truths.cpu().numpy()
+    
+    
 
 
 def get_latents(latent_shape, n_direct, alpha=1.0, device='cpu'):
@@ -127,11 +205,14 @@ def get_latents(latent_shape, n_direct, alpha=1.0, device='cpu'):
 
     for t in range(1, n_direct):
         noise = torch.randn((B, C, H, W), device=device)
-        z[t] = (alpha).sqrt() * z[t - 1] + (1 - alpha).sqrt() * noise
+        z[t] = alpha * z[t - 1] + (1 - alpha**2).sqrt() * noise
 
     z = z.transpose(0, 1).reshape(n_direct * B, C, H, W) # Transposing makes sure the order is preserved.
 
     return z
+
+
+
 
 
 def perform_forecasting(test_pl=False, eval_traj_num=100, ens=20, comparison=False, alpha=0.5):

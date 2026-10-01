@@ -38,25 +38,28 @@ class SQGLeadTimeDataset(Dataset):
         train_frac=0.8,
         max_lead=24,
         random_lead_time=True,
-        eval_traj_num=20,
+        eval_traj_num=100,
         seed=42,
         max_frames = 100,
-        size = 1.0
+  
     ):
         data_dir = Path(data_dir)
         files = natsorted(data_dir.glob('sqg_N64_*hrly_*.npy'))
         assert len(files) > 0, f"No sqg_N64_*hrly_*.npy files in {data_dir}"
 
-        cut   = int(len(files)* size * train_frac)
-        files = files[:cut] if split == 'train' else files[cut:]
-        assert len(files) > 0, f"No files for split='{split}' (train_frac={train_frac})"
-
-        # Load every trajectory once; __getitem__ indexes into these tensors
+        # this would read the whole dataset at first anyway
         self.data = [
             torch.tensor(np.load(f).astype(np.float32) / std)
             for f in files
         ]
-        
+
+        cut   = int(len(files) * train_frac)
+        files = files[:cut] if split == 'train' else files[cut:]
+        assert len(files) > 0, f"No files for split='{split}' (train_frac={train_frac})"
+
+        # files and self.files represent different things
+        # self.files is actually files id
+        self.files = [int(str(f)[-7:-4]) for f in files]
         self.forecasting_leads = list(range(max_lead+1)) # 0...24
         self.max_frames = max_frames
         self.max_lead  = max_lead
@@ -83,7 +86,7 @@ class SQGLeadTimeDataset(Dataset):
 
             self._pairs = [
                 (traj_idx, t, k)
-                for traj_idx in range(len(self.data))
+                for traj_idx in self.files[:cut]
                 for t in range(n_valid_anchors)           # anchor: any valid frame
                 for k in self.forecasting_leads   # train on [0, 24] hour, 25 step in total   
             ]
@@ -93,10 +96,10 @@ class SQGLeadTimeDataset(Dataset):
         else:
             # Eval mode.
             rng = np.random.default_rng(seed)
-            traj_indices = rng.integers(0, len(self.data), size=eval_traj_num)
+            traj_idxs = rng.choice(self.files, size=eval_traj_num)
             # Anchor t drawn from all valid positions — not just frame 0
             t_indices    = rng.integers(0, n_valid_anchors, size=eval_traj_num)
-            self._eval_points = list(zip(traj_indices.tolist(), t_indices.tolist()))
+            self._eval_points = list(zip(traj_idxs.tolist(), t_indices.tolist()))
 
     def __len__(self):
         if self.random_lead_time:

@@ -33,7 +33,7 @@ Key changes from original:
 # ============================================================================
 
 # ── data ──────────────────────────────────────────────────────────────────
-DATA_DIR       = DATA_100    # swap to DATA_500 for full training run
+DATA_DIR       = DATA_500    # swap to DATA_500 for full training run
 DATA_STD       = 2660.0
 MAX_LEAD       = 24          # direct leads: k in {0, 1, ..., 24}
 MAX_FRAMES     = 100         # fixed by sqg_generate.py
