@@ -77,6 +77,12 @@ class Conv2d(torch.nn.Module):
         self.circular_padding = circular_padding
 
     def circ_pad(self, x, pad):
+        #QUESTION: what's this?
+        # circular padding:
+        # assume you want to pad around a matrix A
+        # for A[0, 0], you need to pad 3 elemets at A[-1, -1], A[-1, 0], A[0, -1]
+        # after circular padding
+        # A[-1, -1] = A[n-1, n-1], A[-1, 0] = A[n-1, 0], A[0, -1] = A[0, n-1]
         if self.circular_padding:
             pad_func = torch.nn.CircularPad2d((pad, pad, pad, pad))
         else:
@@ -87,6 +93,10 @@ class Conv2d(torch.nn.Module):
     def forward(self, x):
         w = self.weight.to(x.dtype) if self.weight is not None else None
         b = self.bias.to(x.dtype) if self.bias is not None else None
+        #QUESTION: what's this for?
+        # it's blur filter, fixed(unlearnable)
+        # up or down would change the size of feature map
+        # it's used to smooth the excessive pixels
         f = self.resample_filter.to(
             x.dtype) if self.resample_filter is not None else None
         w_pad = w.shape[-1] // 2 if w is not None else 0
@@ -108,16 +118,38 @@ class Conv2d(torch.nn.Module):
             x = torch.nn.functional.conv2d(
                 x, f.tile([self.out_channels, 1, 1, 1]), groups=self.out_channels, stride=2)
         else:
+            # NOT SURE: Only this branch works in my model I suppose
+
             if self.up:
                 x = self.circ_pad(x, f_pad)
+                # explan the size of feature map 4 times
                 x = torch.nn.functional.conv_transpose2d(x, f.mul(4).tile(
                     [self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=(3*f_pad, 3*f_pad))
             if self.down:
                 x = self.circ_pad(x, f_pad)
+                #EXPLAIN: groups
+                # if cin = 2, cout = 4, groups = 2
+                # 2 groups, 1 group 1 cin, 2 cout, 
+                # so 2 kernel filter 1 cin get 2 cout in each group
+                # parameters: 4 kernels in total
+
+                # cin = 2, cout = 4
+                # 4 kernels filter 1 cin, get 4 feature maps
+                # 2 cin in total, so 8 feature maps
+                # add up into 4 channels
+                # parameters: 8 kernels in total
+
+                # Conclusion, set groups reduce parameters
+
+                # blur+downsample = spatial-only, channels unchanged
                 x = torch.nn.functional.conv2d(x, f.tile(
                     [self.in_channels, 1, 1, 1]), groups=self.in_channels, stride=2, padding=(0, 0))
+                # no matter up sampling or down here
+                # the number of channels would be unchanged
+                # learnable kernel would do this job later
             if w is not None:
                 x = self.circ_pad(x, w_pad)
+                # this line would change cout I suppose
                 x = torch.nn.functional.conv2d(x, w, padding=(0, 0))
         if b is not None:
             x = x.add_(b.reshape(1, -1, 1, 1))
@@ -211,11 +243,19 @@ class UNetBlock(torch.nn.Module):
                                out_channels=out_channels, kernel=1, **init_zero)
 
     def forward(self, x, emb):
+        #QUESTION: I haven't figured out this mechanism, claude says it's defined here
+        # Feature-wise Linear Modulation
+        # take a side input (here, emb), 
+        # turn it into a per-channel scale and shift, 
+        # and use that to stretch/shift the feature map
+        # instead of mixing the side input in 
+        # as extra data (like cat does).
         orig = x
         x = self.conv0(silu(self.norm0(x)))
 
         params = self.affine(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
         if self.adaptive_scale:
+            #QUESTION: it seems like it would go into this branch I'm really sure about that
             scale, shift = params.chunk(chunks=2, dim=1)
             x = silu(torch.addcmul(shift, self.norm1(x), scale + 1))
         else:
@@ -288,7 +328,6 @@ class SongUNet(torch.nn.Module):
                  label_dim=0,
                  # Augmentation label dimensionality, 0 = no augmentation.
                  augment_dim=0,
-
                  # Base multiplier for the number of channels.
                  model_channels=128,
                  # Per-resolution multipliers for the number of channels.
@@ -354,26 +393,27 @@ class SongUNet(torch.nn.Module):
         caux = in_channels
 
         for level, mult in enumerate(channel_mult):
-            res = img_resolution >> level
+            #QUESTION: what does res mean?
+            # img_res / 2^level
+            res = img_resolution >> level  
             if level == 0:
                 cin = cout
                 cout = model_channels
                 self.enc[f'{res}x{res}_conv'] = Conv2d(
                     in_channels=cin, out_channels=cout, kernel=3, **init)
             else:
+                #QUESTION: what's down connection for?
                 self.enc[f'{res}x{res}_down'] = UNetBlock(
                     in_channels=cout, out_channels=cout, down=True, **block_kwargs)
                 if encoder_type == 'skip':
+                    #QUESTION: The kernel size selection in skip?
+                    #QUESTION: parameters: down, resample filter, fused_resample
                     self.enc[f'{res}x{res}_aux_down'] = Conv2d(
                         in_channels=caux, out_channels=caux, kernel=0, down=True, resample_filter=resample_filter)
-                    # resample_filter: why we need resample here?
-                    # something like signal processing: I think you should know the feriour stuff first
                     self.enc[f'{res}x{res}_aux_skip'] = Conv2d(
                         in_channels=caux, out_channels=cout, kernel=1, **init)
                 if encoder_type == 'residual':
-                    # I don't know what does the residual mean here
-
-                    # define a new brach aux
+                    #QUESTION: residual mechanism?
                     self.enc[f'{res}x{res}_aux_residual'] = Conv2d(
                         in_channels=caux, out_channels=cout, kernel=3, down=True, resample_filter=resample_filter, fused_resample=True, **init)
                     caux = cout
@@ -383,8 +423,10 @@ class SongUNet(torch.nn.Module):
                 cin = cout
                 cout = model_channels * mult
                 attn = (res in attn_resolutions)
+                #QUESTION: How does attention applied here?
                 self.enc[f'{res}x{res}_block{idx}'] = UNetBlock(
                     in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
+        #QUESTION: what's skip for?
         skips = [block.out_channels for name,
                  block in self.enc.items() if 'aux' not in name]
 
@@ -393,6 +435,8 @@ class SongUNet(torch.nn.Module):
         for level, mult in reversed(list(enumerate(channel_mult))):
             res = img_resolution >> level
             if level == len(channel_mult) - 1:
+                # The feature map has the smallest resolution
+                # It would lower the cost for attention mechanism the most
                 self.dec[f'{res}x{res}_in0'] = UNetBlock(
                     in_channels=cout, out_channels=cout, attention=True, **block_kwargs)
                 self.dec[f'{res}x{res}_in1'] = UNetBlock(
@@ -416,10 +460,11 @@ class SongUNet(torch.nn.Module):
                     in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)
 
     def forward(self, x, noise_labels, class_labels=None, time_labels=None, augment_labels=None):
-        # noise labels: sigma(t)
-        # class_labels: in my workflow it would be the initial state on condition
-        # time_labels: time condition
-        # augment_labels： something about data augment
+        # NOTE: this comment only works in ARCI context
+        # noise labels: interpolant time s
+        # class_labels: anchor x0
+        # time_labels: lead time
+        # augment_labels： don't need that
 
         # Mapping.
         emb = self.map_noise(noise_labels)
@@ -471,6 +516,7 @@ class SongUNet(torch.nn.Module):
             elif 'aux_skip' in name:
                 x = skips[-1] = x + block(aux)
             elif 'aux_residual' in name:
+                #QUESTION: why different here?
                 x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
             else:
                 # normal one

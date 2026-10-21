@@ -1,7 +1,7 @@
 NORM_STD  = 2660
 
 from pathlib import Path
-
+import re
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -15,6 +15,7 @@ DATA_PATH = PROJECT_ROOT / "data"
 # Convenience paths — pass either as data_dir to SQGPairDataset
 DATA_100 = PROJECT_ROOT / "data" / "data_100traj"          # (100 trajectories)
 DATA_500 = PROJECT_ROOT /"data" / "data_500traj"     #   (500 trajectories)
+DATA_test = PROJECT_ROOT /"data" / "test"
 
 
 class SQGLeadTimeDataset(Dataset):
@@ -52,14 +53,19 @@ class SQGLeadTimeDataset(Dataset):
             torch.tensor(np.load(f).astype(np.float32) / std)
             for f in files
         ]
+        self.split = split
+        if split != 'test':
+            # test files are in the independent folder
+            # if test, just read all of them
+            cut   = int(len(files) * train_frac)
+            files = files[:cut] if split == 'train' else files[cut:]
+            assert len(files) > 0, f"No files for split='{split}' (train_frac={train_frac})"
 
-        cut   = int(len(files) * train_frac)
-        files = files[:cut] if split == 'train' else files[cut:]
-        assert len(files) > 0, f"No files for split='{split}' (train_frac={train_frac})"
-
+        
         # files and self.files represent different things
         # self.files is actually files id
-        self.files = [int(str(f)[-7:-4]) for f in files]
+        
+        self.files = [int(re.search(r'_(\d+)\.npy$', str(f)).group(1)) for f in files]
         self.forecasting_leads = list(range(max_lead+1)) # 0...24
         self.max_frames = max_frames
         self.max_lead  = max_lead
@@ -90,7 +96,6 @@ class SQGLeadTimeDataset(Dataset):
                 for t in range(n_valid_anchors)           # anchor: any valid frame
                 for k in self.forecasting_leads   # train on [0, 24] hour, 25 step in total   
             ]
-            # what's the pairs inside?
             
 
         else:
@@ -111,8 +116,8 @@ class SQGLeadTimeDataset(Dataset):
         # by dataloader? 
         # and how we could keep idx random?
         if self.random_lead_time:
-            # Training: return one (anchor, target) pair with its lead label.
-            # `initial` is traj[t] (the anchor, which can be any valid frame),
+            # Training: return one (anchor, target) paiinitialr with its lead label.
+            # `` is traj[t] (the anchor, which can be any valid frame),
             # `target` is traj[t + k] (k frames later).
             traj_idx, t, k = self._pairs[idx]
             initial   = self.data[traj_idx][t]           # (C, H, W) — anchor frame
@@ -126,7 +131,9 @@ class SQGLeadTimeDataset(Dataset):
             # Eval mode: return all requested leads from the same anchor at once.
             # `initial` is traj[t], `target[j]` is traj[t + forecasting_leads[j]].
             # `time_labels[j]` is the normalised lead for lead j, accounting for
+
             traj_idx, t = self._eval_points[idx]
+            traj_idx = (traj_idx - 500) if self.split == 'test' else traj_idx
             initial = self.data[traj_idx][t]             # (C, H, W) — anchor frame
             # forecasting_leads actually includes 0
             # to avoid the situation that in the eval mode the dataset query lead time = 0 so initial=target

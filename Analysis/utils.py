@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from natsort import natsorted
 from matplotlib.animation import FuncAnimation 
+import math
 
 # ── paths ───────────────────────────────────────────────────────────────────
 ANALYSIS_DIR = Path(__file__).resolve().parent
@@ -19,9 +20,9 @@ if str(PROJECT_ROOT) not in sys.path:
 # Inverted-latent sets, keyed by the number of Euler steps used for the inversion.
 # The key MUST be carried through to the forward integration in any round trip: a
 # mismatch produces error that grows with lead and is easily misread as a finding.
-INVERT_DIRS = {100:  DATA_PATH / 'invert_steps=100',
-               300:  DATA_PATH / 'invert_steps=300',
-               1000: DATA_PATH / 'invert_steps=1000'}
+INVERT_DIRS = {100:  DATA_PATH / 'invert' /'invert_steps=100',
+               300:  DATA_PATH / 'invert' /'invert_steps=300',
+               1000: DATA_PATH / 'invert' /'invert_steps=1000'}
 
 
 def load_invert(dir):
@@ -81,6 +82,9 @@ def temporal_difference(x):
     output: 
         diff (24, )
     '''
+
+    if isinstance(x, torch.Tensor):
+        x = x.numpy()
     if len(x.shape) == 6:
         N, ens, L,  _, _, _= x.shape
         x = x.reshape(N, ens, L, -1)
@@ -90,6 +94,8 @@ def temporal_difference(x):
         x = x.reshape(N, L, -1)
         # for each N perform the offset substraction
         diff = np.mean(np.abs(x[:, 1:, ...] - x[:, :-1, ...]), axis=(0, 2))
+    else:
+        print(x.shape)
 
     return diff
 
@@ -110,6 +116,9 @@ def temporal_difference_with_initial(x):
     output: 
         diff (24, )
     '''
+    if isinstance(x, torch.Tensor):
+        x = x.numpy()
+    
     if len(x.shape) == 6:
         N, ens, L,  _, _, _= x.shape
         x = x.reshape(N, ens, L, -1)
@@ -146,28 +155,46 @@ def plot_temporal_difference(diff):
 
 
 
-def get_latents(latent_shape, alpha, device='cpu', markov=False):
+def get_latents(latent_shape, alpha, device='cpu', markov=False, z0=None):
     '''
     expect latents shape should be like (N, ens, leads, levels, H , W)
+    only support one alpha for all the N windows
     '''
+    assert len(latent_shape) == 6, f"you need input a 6 elements tuple, now it's like {latent_shape}" 
     N, ens, leads, C, H, W = latent_shape # latent_shape: (n_samples * n_ens, channels, dx, dy)
     sample_shape = (C, H, W)  # this should be the shape of one sample
+
+    z0 = torch.randn(N, ens, *sample_shape, device=device) if z0 is None else z0
+    assert z0.shape == (N, ens, *sample_shape), f"If you pass z0 as a parameter pls keep the dimension, not {z0.shape}"
+    zs = torch.zeros(latent_shape, device=device)
+    zs[:, :, 0, ...] = z0
+
     # for each trajectory
     # sample ensemble times independently
     # sample N  trajectories times independently
+        
     if isinstance(alpha, float):
-        alpha = np.full(leads, alpha)
-    z0 = torch.randn(N, ens, *sample_shape, device=device)
+        # alpha would be baseline alpha
+        alpha = np.full(leads-1, alpha)
 
-    zs = torch.zeros(latent_shape, device=device)
-    zs[:, :, 0, ...] = z0
-    alpha = torch.tensor(alpha, device=device)
+    if isinstance(alpha, np.ndarray):
+        # alpha would be fitted by kernel or just empirical mean
+        if len(alpha.shape) == 1:
+            alpha = np.repeat(alpha[None, :], N, axis=0)
+        alpha = torch.tensor(alpha, device=device)
+
+    if alpha.shape == torch.Size([leads - 1]):
+        alpha = alpha[None, :].to(device)
+
+    assert alpha.shape[0] == N, f"The number of alpha and number of trajectories should keep same. now they are {N}, {alpha.shape[0]}"
+    assert alpha.shape == (N, leads-1), f"It should be like (N, 23) anyway, but now it's {alpha.shape}"
+    assert alpha.is_cuda, "Are you going to perform forecasting with CPU?"
 
     for t in range(1, leads):
-        noise = torch.randn(N, ens,*sample_shape, device=device)
+        noise = torch.randn(N, ens, *sample_shape, device=device)
         idx = t - 1 if markov else 0
-        zs[:, :, t, ...] = alpha[t] * zs[:, :, idx, ...] + (1 - alpha[t]**2).sqrt() * noise
-
+        alpha_t = alpha[:, t - 1][:, None, None, None, None]
+        zs[:, :, t, ...] = alpha_t * zs[:, :, idx, ...] + (1 - alpha_t**2).sqrt() * noise
     return zs
 
 
@@ -179,18 +206,24 @@ def visualize_results(x, n_col):
     '''
     labels = list(x.keys())
     data = list(x.values())
-    # let's do some check at first
+    # let's do some check math.ceil(7 / 2)t first
     assert isinstance(labels[0], str), "The key should be string"
     assert data[0].shape == (24, 64, 64), f"The dimension of data is incorrect, it's {data[0].shape}."
 
     leads = data[0].shape[0]
     n_plots = len(x) 
-    n_row = n_plots // n_col
+    n_row = math.ceil(n_plots / n_col)
     assert n_row != 0, "Check if you have enough data to fill with a column."
     fig, axes = plt.subplots(n_row, n_col, figsize=(7, 3.5 * n_row))
     axes = np.atleast_1d(axes).flatten()
 
+    # for ax in axes[n_plots:]:
+    #     ax.axis('off')          # hide unused trailing axes
+
     for i, ax in enumerate(axes):
+        if i >= n_plots:
+            ax.axis('off')
+            break
         ax.set_title(labels[i])
         ax.set_xticks([]); ax.set_yticks([])
         abs_max = np.max(np.abs(data[i][0]))
@@ -202,16 +235,15 @@ def visualize_results(x, n_col):
     plt.tight_layout()
 
     # I want this stupid function in function disappear
-    def update(i, data, labels, n_lead, fig, axes):
-        """Update animation frame"""
+    def update(i, data, labels, n_lead, fig, axes, n_plots):
         abs_hour = i % n_lead + 1
-        for j, ax in enumerate(axes.flatten()):
-            ax.images[0].set_data(data[j][i])
+        for j in range(n_plots):
+            axes[j].images[0].set_data(data[j][i])
         fig.suptitle(f'+{abs_hour}h', fontsize=10, y=1.02)
-        return axes.flatten().tolist()
+        return axes[:n_plots].tolist()
 
     anim = FuncAnimation(fig, update, 
-                        fargs=(data, labels, leads, fig, axes),
+                        fargs=(data, labels, leads, fig, axes, n_plots),
                         frames=leads, interval=25)
     plt.close(fig)
     return anim  
@@ -323,3 +355,73 @@ def alpha(Z):
 
 
 
+def compute_alpha(Z):
+    """
+    Lag-1 correlation corr(z_{t-1}, z_t).
+
+    Args:
+        Z: array (N, T, 2, 64, 64)
+        per_sample: True -> one alpha per trajectory, shape (N, T-1)
+                    False -> one alpha pooled over trajectories, shape (T-1,)
+        center: remove the mean field across trajectories at each lead time
+
+    Returns:
+        alpha in [-1, 1]
+    """
+    Z = Z.reshape(Z.shape[0], Z.shape[1], -1)      # (N, T, D)
+    Z = Z - Z.mean(axis=0, keepdims=True)
+
+    Zp, Zc = Z[:, :-1], Z[:, 1:]                   # (N, T-1, D)
+    cov = np.einsum("ntx,ntx->nt", Zp, Zc)
+    vp  = np.einsum("ntx,ntx->nt", Zp, Zp)
+    vc  = np.einsum("ntx,ntx->nt", Zc, Zc)
+
+    return cov / np.sqrt(vp * vc)              # (N, T-1)
+
+
+def get_window(meta, data_dir, std=2660):
+    '''Expect meta is [N, 2]
+    where N is the number of windows
+    and for each n there would be a traj_idx, and anchor idx
+
+    the input should be torch data and the output is also torch data.
+
+    if you want to optimize this implement
+    there would be multiple windows sample from one trajectory
+    you can try to read each trajectory only once 
+    '''
+
+    if meta.device.type == 'cuda':
+        meta = meta.cpu()
+
+
+    N = meta.shape[0]
+    traj_ids = meta[:, 0]
+    anchor_ids = meta[:, 1]
+    windows = torch.empty((N, 24, 2, 64, 64))
+    hit = {}
+    
+    for i in range(N):
+
+        traj_id = traj_ids[i]
+        if not isinstance(traj_id, int):
+            traj_id = int(traj_id.item())
+
+        if traj_id in hit: 
+            traj = hit.get(traj_id)
+        else:
+            try:
+                file_name = data_dir / f'sqg_N64_1hrly_{traj_id}.npy'
+                traj = np.load(file_name)
+            except Exception as e:
+                print(f"Error loading {file_name}: {e}")
+                return "BOOM!"
+            hit[traj_id] = traj
+
+        anchor_id = anchor_ids[i]
+        if not isinstance(anchor_id, int):
+            anchor_id = int(anchor_id.item())
+
+        physical_window = traj[(anchor_id+1):anchor_id+25, ... ]
+        windows[i] = torch.as_tensor(physical_window.astype(np.float32) / std)
+    return windows

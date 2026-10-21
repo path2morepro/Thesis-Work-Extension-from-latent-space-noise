@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 
 from .samplers import CondSampler
 from .train import SAVE_PATH
-from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH
+from .dataset import SQGLeadTimeDataset, DATA_100, DATA_500, DATA_PATH, DATA_test
 from .utils import visualize_results, compute_metrics, plot_metrics
 
 
@@ -125,7 +125,7 @@ def forecast(
 
 def forecast_analysis(
     sampler,
-    data_dir=DATA_500,
+    data_dir=DATA_test,
     seed=42,
     latents = None,
     n_traj = None,
@@ -151,7 +151,7 @@ def forecast_analysis(
     assert latents.is_cuda, "Run on your GPU."
     ds = SQGLeadTimeDataset(
         data_dir         = data_dir,
-        split            = 'val',
+        split            = 'test',
         random_lead_time = False,
         eval_traj_num = n_traj,
         seed=seed
@@ -164,8 +164,8 @@ def forecast_analysis(
     for initial, truth, lead_time, traj_idx, anchor in tqdm(loader, total=len(loader)):
         truths[i] = truth.squeeze(0)
         latent = latents[i]  # latent [leads, levels, H , W]
-        traj_idx      = traj_idx.item()
-        anchor      = anchor.item()
+        # traj_idx      = traj_idx.item()
+        # anchor      = anchor.item()
 
 
         time_labels = lead_time.squeeze(0).repeat(ens)

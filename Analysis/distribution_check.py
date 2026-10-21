@@ -15,8 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
 
-import utils
-from utils import INVERT_DIRS, L, leads, cmap, load_invert, save_fig
+
 
 
 def marginal_stats(Z):
@@ -46,32 +45,13 @@ def plot(st, steps):
               (axes[1], st['kurt'],  'excess kurtosis  (0 expected)',   0.0),
               (axes[2], st['xchan'], 'cross-channel corr  (0 expected)', 0.0)]
     for ax, y, ttl, ref in panels:
-        ax.plot(leads, y, 'o-', ms=4, color=cmap(0.2))
+        ax.plot(y, 'o-', ms=4)
         ax.axhline(ref, color='k', lw=0.9, ls='--')
         ax.set_xlabel('lead tau [h]'); ax.set_title(ttl, fontsize=10); ax.grid(alpha=0.3)
-    axes[0].plot(leads, st['mean'], 's-', ms=3, color=cmap(0.7), label='mean (0 expected)')
+    axes[0].plot(st['mean'], 's-', ms=3, label='mean (0 expected)')
     axes[0].legend(fontsize=8)
     fig.suptitle(f'marginal of the inverted latents — {steps}-step inversion', fontsize=10)
     fig.tight_layout()
     return fig
 
 
-def main(steps=1000):
-    Z, _, _, _ = load_invert(INVERT_DIRS[steps])
-    st = marginal_stats(Z)
-
-    print(f'{len(Z)} windows, {steps}-step inversion')
-    print(f'pooled over all leads:  mean {Z.mean():+.4f}   std {Z.std():.4f}   '
-          f'excess kurtosis {stats.kurtosis(Z.ravel()):+.4f}')
-    print(f"per-lead std   range [{st['std'].min():.4f}, {st['std'].max():.4f}]")
-    print(f"per-lead kurt  range [{st['kurt'].min():+.4f}, {st['kurt'].max():+.4f}]")
-    print(f"cross-channel  range [{st['xchan'].min():+.4f}, {st['xchan'].max():+.4f}]")
-    print('NOTE cross-channel correlation is small but consistently POSITIVE at every '
-          'lead;\n     it is reported, not tested — no error bar is computed for it here.')
-    save_fig(plot(st, steps), f'distribution_check_steps={steps}')
-
-
-if __name__ == '__main__':
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--steps', type=int, default=1000, choices=sorted(INVERT_DIRS))
-    main(**vars(p.parse_args()))

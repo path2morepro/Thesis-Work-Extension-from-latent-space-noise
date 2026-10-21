@@ -3,7 +3,7 @@ from sqgturb import SQG, rfft2, irfft2
 import os
 from tqdm import tqdm
 
-versions = 500  # We need one version for each dataset (train, val or test)
+versions = 10  # We need one version for each dataset (train, val or test)
 
 for version in tqdm(range(versions)):
     # run SQG turbulence simulation, optionally plotting results to screen and/or saving to
@@ -124,7 +124,7 @@ for version in tqdm(range(versions)):
     model.timesteps = int(outputinterval/model.dt)
 
     # save data plotted in a netcdf file.
-    savedata = f'data/sqg_N{N}_{hrs}hrly_{version}'
+    savedata = f'data/test/sqg_N{N}_{hrs}hrly_{version+500}'
 
     if savedata is not None:
         from netCDF4 import Dataset

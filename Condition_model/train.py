@@ -127,10 +127,6 @@ def build_model(device):
     return model
 
 
-# ============================================================================
-# Training
-# ============================================================================
-
 def run_epoch(model, loader, device, optimizer=None, warmup=None, desc=''):
     """One epoch. Trains when optimizer is given, otherwise evaluates."""
     train = optimizer is not None
