@@ -13,3 +13,4 @@ report/
 logs/
 archive/
 .run_all.lock
+*.md

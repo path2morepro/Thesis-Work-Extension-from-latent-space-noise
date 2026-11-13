@@ -79,47 +79,47 @@ def plot_temporal_difference(diff):
     ax.grid(alpha=0.3)
     return fig, ax
 
-def get_latents(latent_shape, alpha, device='cpu', markov=True, z0=None):
-    '''
-    expect latents shape should be like (N, ens, leads, levels, H , W)
-    only support one alpha for all the N windows
-    '''
-    assert len(latent_shape) == 6, f"you need input a 6 elements tuple, now it's like {latent_shape}" 
-    N, ens, leads, C, H, W = latent_shape # latent_shape: (n_samples * n_ens, channels, dx, dy)
-    sample_shape = (C, H, W)  # this should be the shape of one sample
+# def get_latents(latent_shape, alpha, device='cpu', z0=None):
+#     '''
+#     expect latents shape should be like (N, ens, leads, levels, H , W)
+#     only support one alpha for all the N windows
+#     '''
+#     assert len(latent_shape) == 6, f"you need input a 6 elements tuple, now it's like {latent_shape}" 
+#     N, ens, leads, C, H, W = latent_shape # latent_shape: (n_samples * n_ens, channels, dx, dy)
+#     sample_shape = (C, H, W)  # this should be the shape of one sample
 
-    z0 = torch.randn(N, ens, *sample_shape, device=device) if z0 is None else z0
-    assert z0.shape == (N, ens, *sample_shape), f"If you pass z0 as a parameter pls keep the dimension, not {z0.shape}"
-    zs = torch.zeros(latent_shape, device=device)
-    zs[:, :, 0, ...] = z0
+#     z0 = torch.randn(N, ens, *sample_shape, device=device) if z0 is None else z0
+#     assert z0.shape == (N, ens, *sample_shape), f"If you pass z0 as a parameter pls keep the dimension, not {z0.shape}"
+#     zs = torch.zeros(latent_shape, device=device)
+#     zs[:, :, 0, ...] = z0
 
-    # for each trajectory
-    # sample ensemble times independently
-    # sample N  trajectories times independently
+#     # for each trajectory
+#     # sample ensemble times independently
+#     # sample N  trajectories times independently
         
-    if isinstance(alpha, float):
-        # alpha would be baseline alpha
-        alpha = np.full(leads-1, alpha)
+#     if isinstance(alpha, float):
+#         # alpha would be baseline alpha
+#         alpha = np.full(leads-1, alpha)
 
-    if isinstance(alpha, np.ndarray):
-        # alpha would be fitted by kernel or just empirical mean
-        if len(alpha.shape) == 1:
-            alpha = np.repeat(alpha[None, :], N, axis=0)
-        alpha = torch.tensor(alpha, device=device)
+#     if isinstance(alpha, np.ndarray):
+#         # alpha would be fitted by kernel or just empirical mean
+#         if len(alpha.shape) == 1:
+#             alpha = np.repeat(alpha[None, :], N, axis=0)
+#         alpha = torch.tensor(alpha, device=device)
 
-    if alpha.shape == torch.Size([leads - 1]):
-        alpha = alpha[None, :].to(device)
+#     if alpha.shape == torch.Size([leads - 1]):
+#         alpha = alpha[None, :].to(device)
 
-    assert alpha.shape[0] == N, f"The number of alpha and number of trajectories should keep same. now they are {N}, {alpha.shape[0]}"
-    assert alpha.shape == (N, leads-1), f"It should be like (N, 23) anyway, but now it's {alpha.shape}"
-    assert alpha.is_cuda, "Are you going to perform forecasting with CPU?"
+#     assert alpha.shape[0] == N, f"The number of alpha and number of trajectories should keep same. now they are {N}, {alpha.shape[0]}"
+#     assert alpha.shape == (N, leads-1), f"It should be like (N, 23) anyway, but now it's {alpha.shape}"
+#     assert alpha.is_cuda, "Are you going to perform forecasting with CPU?"
 
-    for t in range(1, leads):
-        noise = torch.randn(N, ens, *sample_shape, device=device)
-        idx = t - 1 if markov else 0
-        alpha_t = alpha[:, t - 1][:, None, None, None, None]
-        zs[:, :, t, ...] = alpha_t * zs[:, :, idx, ...] + (1 - alpha_t**2).sqrt() * noise
-    return zs
+#     for t in range(1, leads):
+#         noise = torch.randn(N, ens, *sample_shape, device=device)
+#         idx = t - 1 
+#         alpha_t = alpha[:, t - 1][:, None, None, None, None]
+#         zs[:, :, t, ...] = alpha_t * zs[:, :, idx, ...] + (1 - alpha_t**2).sqrt() * noise
+#     return zs
 
 def visualize_results(x, n_col):
     '''
@@ -483,7 +483,53 @@ def power_spectrum(Z, n_std=1.96, save=False, ds='euler'):
     else:
         plt.show()
 
+@torch.no_grad()
+def get_latents(latent_shape, model, x0, device='cpu', batch=8):
+    '''
+    Sample latent trajectories from the trained time-varying OU model (always with an ensemble).
 
+    latent_shape = (N, E, L, C, H, W): N windows, E members, L leads (index 0 = lead 1).
+    x0: (N, C, H, W) physical state at the anchor, scaled like in training (get_window, std=2660).
+
+    Same chain the training loss scores, per pixel:
+        xi_1 ~ N(0, 1)
+        xi_k = alpha_k * xi_{k-1} + sqrt(1 - alpha_k^2) * noise,   alpha_k = exp(-c2_k / 2)
+        z_k  = sigma(lead k) * xi_k
+    so Var(z_k) = sigma_k^2 and corr(z_{k-1}, z_k) = alpha_k.
+    Returns zs of shape (N, E, L, C, H, W).
+    '''
+    assert len(latent_shape) == 6, f"you need input a 6 elements tuple, now it's like {latent_shape}"
+    N, E, L, C, H, W = latent_shape
+    assert x0.shape[0] == N, "Generated latent space data should match the physical condition state."
+    was_training = model.training
+    model.eval()                                            # switch off dropout in the CNN
+
+    t, ch, x, y = torch.meshgrid(torch.arange(L - 1), torch.arange(C), torch.arange(H), torch.arange(W), indexing='ij')
+    lead = (t.reshape(-1) + 2).float().to(device)           # leads 2..L, (L-1)*C*H*W points
+    ch = ch.reshape(-1).to(device)
+    x = x.reshape(-1).float().to(device)
+    y = y.reshape(-1).float().to(device)
+
+    zs = torch.empty(latent_shape, device=device)
+    for s in range(0, N, batch):                            # chunk over windows to bound GPU memory
+        x0_b = x0[s:s + batch].to(device).float()
+        b = x0_b.shape[0]
+        sigma_next, c2 = model(lead, x, y, ch, x0_b)        # sigma at lead k, c2 on [k-1, k]   (b, P)
+        sigma_prev, _ = model(lead - 1, x, y, ch, x0_b)     # sigma at lead k-1
+        shape = (b, 1, L - 1, C, H, W)                      # 1 = ensemble dim, broadcasts over E
+        alpha = torch.exp(-0.5 * c2).reshape(shape)
+        std_innov = (-torch.expm1(-c2)).sqrt().reshape(shape)   # sqrt(1 - alpha^2)
+        # sigma for every lead: lead 1 from sigma_prev's first slice, leads 2..L from sigma_next
+        sigma = torch.cat([sigma_prev.reshape(shape)[:, :, :1], sigma_next.reshape(shape)], 2)  # (b,1,L,C,H,W)
+
+        xi = torch.randn(b, E, C, H, W, device=device)      # lead 1 marginal
+        zs[s:s + b, :, 0] = sigma[:, :, 0] * xi
+        for k in range(1, L):                               # Z index k is lead k+1, uses alpha[k-1]
+            xi = alpha[:, :, k - 1] * xi + std_innov[:, :, k - 1] * torch.randn_like(xi)
+            zs[s:s + b, :, k] = sigma[:, :, k] * xi
+
+    model.train(was_training)
+    return zs
 
 
 
