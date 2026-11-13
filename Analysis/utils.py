@@ -7,65 +7,24 @@ import matplotlib.pyplot as plt
 from natsort import natsorted
 from matplotlib.animation import FuncAnimation 
 import math
+from scipy import stats
 
-# ── paths ───────────────────────────────────────────────────────────────────
-ANALYSIS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ANALYSIS_DIR.parent
-DATA_PATH    = PROJECT_ROOT / 'data'
-RESULT_DIR   = ANALYSIS_DIR / 'Result'
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+ROOT = Path(__file__).resolve().parent
+save_path = ROOT / 'Result' / 'DistributionCheck'
+save_path_rk4 = ROOT / 'Result' / 'DistributionCheck' / 'RK4'
 
-# Inverted-latent sets, keyed by the number of Euler steps used for the inversion.
-# The key MUST be carried through to the forward integration in any round trip: a
-# mismatch produces error that grows with lead and is easily misread as a finding.
-INVERT_DIRS = {100:  DATA_PATH / 'invert' /'invert_steps=100',
-               300:  DATA_PATH / 'invert' /'invert_steps=300',
-               1000: DATA_PATH / 'invert' /'invert_steps=1000'}
-
+def result_dir(ds):
+    return {'euler': save_path, 'rk4': save_path_rk4}[ds]
 
 def load_invert(dir):
-    """Load every inverted-latent file in one directory.
-
-    Args:
-        dir_ : directory of invert_traj{T}initial{A}.npy files. Each file is ONE window
-               = one (trajectory T, anchor A) pair holding leads tau = 1..24.
-
-    Returns:
-        Z     : (N, L, C, H, W) float32 — latents, already in normalised model units.
-                The dataset divided by NORM_STD before the inversion; never divide again.
-        traj  : (N,) int — trajectory id per window. LOCAL to the val split (files[400:]),
-                so index SQGLeadTimeDataset(split='val').data with it, never a 500-file set.
-        anch  : (N,) int — anchor frame per window; lead k pairs with frame anch + 1 + k.
-    """
-    files = natsorted(Path(dir).glob('invert_traj*initial*.npy'))
+    dir = Path(dir) if isinstance(dir, str) else dir 
+    files = natsorted(dir.glob('invert_traj*initial*.npy'))
     assert files, f'no invert_traj*initial*.npy in {dir}'
     Z    = np.stack([np.load(f).astype(np.float32) for f in files])
     meta = np.array([[int(m.group(1)), int(m.group(2))] for f in files
                      for m in [re.search(r'invert_traj(\d+)initial(\d+)', f.name)]])
     return Z, meta[:, 0], meta[:, 1]
-
-
-def shared_windows(dirs=None):
-    """Filenames present in EVERY given invert directory.
-
-    Any comparison across step counts must run on the same windows, otherwise the
-    integrator is confounded with which trajectories and anchors happened to be picked.
-
-    Args:
-        dirs : iterable of directories; defaults to all of INVERT_DIRS.
-
-    Returns:
-        sorted list of filenames common to all of them.
-    """
-    dirs = list(INVERT_DIRS.values()) if dirs is None else list(dirs)
-    common = set.intersection(*[{f.name for f in Path(d).glob('invert_traj*initial*.npy')}
-                                for d in dirs])
-    assert common, f'no window is present in every directory: {dirs}'
-    return sorted(common)
-
-
 
 def temporal_difference(x):
     '''
@@ -99,39 +58,6 @@ def temporal_difference(x):
 
     return diff
 
-
-def temporal_difference_with_initial(x):
-    '''
-    Since if we estimate z_t using z_0, I'm thinking it might make more sense
-    if we also evaulate it in this way.
-
-    This function can accept either truth data or predict data
-
-    input:
-        if preds (N, ens, 24, levels, H, W)
-        if truths (N, 24, levels, H, W)
-
-        and they are numpy
-
-    output: 
-        diff (24, )
-    '''
-    if isinstance(x, torch.Tensor):
-        x = x.numpy()
-    
-    if len(x.shape) == 6:
-        N, ens, L,  _, _, _= x.shape
-        x = x.reshape(N, ens, L, -1)
-        diff = np.mean(np.abs(x[:, :, 0:1, ...] - x), axis=(0, 1, 3))
-    elif len(x.shape) == 5:
-        N, L, _, _, _ = x.shape
-        x = x.reshape(N, L, -1)
-        # for each N perform the offset substraction
-        diff = np.mean(np.abs(x[:, 0:1, ...] - x), axis=(0, 2))
-
-    return diff
-
-
 def plot_temporal_difference(diff):
     '''
     the diff here cannot be used directly after temporal difference
@@ -142,7 +68,7 @@ def plot_temporal_difference(diff):
     diff: (n_diff, 24)
     '''
 
-    _, ax = plt.subplots(figsize=(7, 4))
+    fig, ax = plt.subplots(figsize=(7, 4))
     for label, values in diff.items():
         values = np.asarray(values)
         x = np.arange(len(values)) 
@@ -151,11 +77,9 @@ def plot_temporal_difference(diff):
     ax.set_ylabel("difference")
     ax.legend()
     ax.grid(alpha=0.3)
-    return ax
+    return fig, ax
 
-
-
-def get_latents(latent_shape, alpha, device='cpu', markov=False, z0=None):
+def get_latents(latent_shape, alpha, device='cpu', markov=True, z0=None):
     '''
     expect latents shape should be like (N, ens, leads, levels, H , W)
     only support one alpha for all the N windows
@@ -196,7 +120,6 @@ def get_latents(latent_shape, alpha, device='cpu', markov=False, z0=None):
         alpha_t = alpha[:, t - 1][:, None, None, None, None]
         zs[:, :, t, ...] = alpha_t * zs[:, :, idx, ...] + (1 - alpha_t**2).sqrt() * noise
     return zs
-
 
 def visualize_results(x, n_col):
     '''
@@ -248,136 +171,28 @@ def visualize_results(x, n_col):
     plt.close(fig)
     return anim  
 
-
-def empirical_correlation(Z):
-    """
-    Compute the empirical temporal correlation here
-
-    Args:
-        Z: invert data
-    
-    Return:
-        rho: empirical temporal correlation (N, leads, leads)
-        rho_bar: average rho over trajectories (leads, leads)
-        var(z): average variance of each zt over trajectories (leads, )
-    """
-    # flatten others except num_traj and lead time
-    # (N, 24, 2*64*64)
-    Xf = Z.reshape(Z.shape[0], Z.shape[1], -1)
-    Xf = Xf - Xf.mean(axis=0, keepdims=True)              # remove per-lead mean field
-    # It computes the correlation between leads
-    # for each n, there is a L*L matrix
-    cov  = np.einsum("nlx,nmx->nlm", Xf, Xf) / Xf.shape[-1] # (n, L, L) 
-    
-    # why mean here at first?
-    # wipe out the trajectories
-    v  = np.diagonal(cov.mean(axis=0)).copy()               # raw per-lead variances
-    # outer produces a matrix from two vectors
-    # outer(v,v) would be the variance of leads over all trajectories
-    rho = cov / np.sqrt(np.outer(v, v))                      # normalised per sample
-
-    #  (N, 24, 24), Gn.mean (24, 24), v (24, )
-    return rho, rho.mean(axis=0), v
-
-def collapse_by_lag(rho):
-    '''
-    Return the temporal correlation collapsed into rho(Delta).
-    It is used to examine the stationarity.
-    
-    Args:
-        rho: empirical temporal correlation (N, 24, 24)
-
-    Return:
-        deltas: delta t
-        rho_bar: collapsed correlation pooled over trajectories
-        rho: same but not averaged
-    '''
-
-    n, L_, _ = rho.shape
-    deltas   = np.arange(1, L_)
-    rhos = np.empty((L_-1, n))
-    rho_bar  = np.empty(L_ - 1)
-    for i, D in enumerate(deltas):
-        per_sample = np.diagonal(rho, offset=D, axis1=1, axis2=2).mean(axis=1)  # (n, ) 
-        rhos[i] = per_sample
-        rho_bar[i] = per_sample.mean()
-
-    return deltas, rho_bar, rhos
-
-
-def bootstrap_rho(Z, n_boot=200, seed=0):
-    """Bootstrap the correlation matrix by resampling windows with replacement.
-
-    Args:
-        Z      : (N, L, ...) latents, one row per window
-        n_boot : replicates
-        seed   : RNG seed, so the band is reproducible
-
-    Returns:
-        (n_boot, L, L) — one ρ̂ matrix per replicate. Percentiles across axis 0 give
-        the CI of any quantity derived from ρ̂.
-
-    Each replicate draws n = N with replacement: the width of a bootstrap CI has to
-    reflect the sample size actually used.
-    """
-    rng, N = np.random.default_rng(seed), Z.shape[0]
-    rho_bar_samples = []
-    for _ in range(n_boot):
-        sample = Z[rng.integers(0, N, size=N)]
-        rho_bar_sample = empirical_correlation(sample)[1]
-        rho_bar_samples.append(rho_bar_sample)
-
-    return np.stack(rho_bar_samples, axis=0)
-
-
-
-def alpha(Z):
-    """
-    Function for computing Cov(z0, zt)
-
-    Args:
-        Z: invert data
-
-    Return:
-        alpha but normalised by var
-    """
-    # flatten others except num_traj and lead time
-    # (N, 24, 2*64*64)
-    Xf = Z.reshape(Z.shape[0], Z.shape[1], -1)
-    Xf = Xf - Xf.mean(axis=0, keepdims=True)              # remove per-lead mean field
-    X0 = np.expand_dims(Xf[:, 0, ...], axis=1)  # Z0
-    d = Xf.shape[-1]  # dimension of Z
-    # It computes the correlation between t=0 and t= others
-    alpha  = np.einsum("nlx,nmx->nlm", Xf, X0) / d   # (n, L, 1) 
-    normalised_alpha = alpha / np.var(X0)
-
-    return normalised_alpha
-
-
-
-def compute_alpha(Z):
+def compute_scalar_alpha(Z):
     """
     Lag-1 correlation corr(z_{t-1}, z_t).
 
     Args:
         Z: array (N, T, 2, 64, 64)
-        per_sample: True -> one alpha per trajectory, shape (N, T-1)
-                    False -> one alpha pooled over trajectories, shape (T-1,)
-        center: remove the mean field across trajectories at each lead time
 
     Returns:
         alpha in [-1, 1]
     """
-    Z = Z.reshape(Z.shape[0], Z.shape[1], -1)      # (N, T, D)
-    Z = Z - Z.mean(axis=0, keepdims=True)
-
+    Z = np.asarray(Z, dtype=np.float64).reshape(Z.shape[0], Z.shape[1], -1)
     Zp, Zc = Z[:, :-1], Z[:, 1:]                   # (N, T-1, D)
+
     cov = np.einsum("ntx,ntx->nt", Zp, Zc)
     vp  = np.einsum("ntx,ntx->nt", Zp, Zp)
     vc  = np.einsum("ntx,ntx->nt", Zc, Zc)
 
-    return cov / np.sqrt(vp * vc)              # (N, T-1)
+    covs = np.sum(cov, axis=(0,1))
+    vps = np.sum(vp, axis=(0,1))
+    vcs = np.sum(vc, axis=(0,1))
 
+    return covs / np.sqrt(vps * vcs)              # scalar
 
 def get_window(meta, data_dir, std=2660):
     '''Expect meta is [N, 2]
@@ -399,6 +214,7 @@ def get_window(meta, data_dir, std=2660):
     traj_ids = meta[:, 0]
     anchor_ids = meta[:, 1]
     windows = torch.empty((N, 24, 2, 64, 64))
+    X0s = torch.empty((N, 2, 64, 64))
     hit = {}
     
     for i in range(N):
@@ -423,5 +239,252 @@ def get_window(meta, data_dir, std=2660):
             anchor_id = int(anchor_id.item())
 
         physical_window = traj[(anchor_id+1):anchor_id+25, ... ]
+        X0s[i] = torch.as_tensor(traj[anchor_id] / std)
         windows[i] = torch.as_tensor(physical_window.astype(np.float32) / std)
-    return windows
+    return windows, X0s
+
+# per-pixel normality and parameters check
+def bh_adjust(p):
+    L, m = p.shape
+    order = np.argsort(p, axis=1)
+    ranked = np.take_along_axis(p, order, axis=1)
+    adj = ranked * m / np.arange(1, m + 1)
+    adj = np.minimum.accumulate(adj[:, ::-1], axis=1)[:, ::-1]
+    out = np.empty_like(p)
+    np.put_along_axis(out, order, np.clip(adj, 0, 1), axis=1)
+    return out
+
+def plot_rejection_ratio(ratio_ss, ratio_z, ratio_chi2, ds='euler'):
+    L = len(ratio_ss)
+    leads = np.arange(1, L + 1)
+    top = max(ratio_ss.max(), ratio_z.max(), ratio_chi2.max()) or 1e-3
+    ss_color, z_color, chi2_color = '#2a78d6', '#eb6834', '#1baf7a'
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.plot(leads, ratio_ss, color=ss_color, marker='o', ms=4, lw=1.5, label='Shapiro-Wilk')
+    ax.plot(leads, ratio_z, color=z_color, marker='s', ms=4, lw=1.5, label='z-test')
+    ax.plot(leads, ratio_chi2, color=chi2_color, marker='^', ms=4, lw=1.5, label='chi-square')
+    ax.set_xlim(-0.5, L + 0.5)
+    ax.set_ylim(-0.03 * top, 1.15 * top)
+    ax.set_xlabel('lead time')
+    ax.set_ylabel('rejection ratio after Benjamini-Hochberg procedure')
+    ax.set_title('Rejection ratio per lead time', loc='left')
+    ax.grid(alpha=0.3)
+    ax.legend(loc='lower right', bbox_to_anchor=(1, 1), ncol=3, frameon=False)
+    fig.tight_layout()
+
+    # Lead 1 labels extend left and lead 2 labels right, so the two columns can't touch
+    base, line_height = 8, 14
+    curves = [ax.transData.transform(np.column_stack([leads, r])) for r in (ratio_ss, ratio_z, ratio_chi2)]
+    samples = np.vstack([np.linspace(c[k], c[k + 1], 100) for c in curves for k in range(L - 1)])
+
+    def hits_curve(label):
+        box = label.get_window_extent().padded(3)
+        return np.any((samples[:, 0] > box.x0) & (samples[:, 0] < box.x1)
+                      & (samples[:, 1] > box.y0) & (samples[:, 1] < box.y1))
+
+    for i, (ha, dx) in enumerate([('right', -4), ('left', 4)]):
+        (low, low_color), (high, high_color) = sorted(
+            [(ratio_ss[i], ss_color), (ratio_z[i], z_color)], key=lambda p: p[0]
+        )
+        gap = (ax.transData.transform((0, high))[1] - ax.transData.transform((0, low))[1]) * 72 / fig.dpi
+        offsets = (base, max(base, base + line_height - gap))
+        labels = [
+            ax.annotate(f'{value:.4f}', (leads[i], value), xytext=(dx, dy), textcoords='offset points',
+                        ha=ha, color=color, fontsize=9, fontweight='bold', zorder=5,
+                        bbox=dict(facecolor='white', edgecolor='none', pad=1))
+            for value, color, dy in zip((low, high), (low_color, high_color), offsets)
+        ]
+        while any(hits_curve(label) for label in labels):
+            for label in labels:
+                label.xyann = (label.xyann[0], label.xyann[1] + 4)
+
+    fig.savefig(f"{result_dir(ds)}/rejection_ratio.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+def pixel_level_test(Z, ds='euler'):
+    '''
+    Input: Z latent space data
+    Output: p-value, p-value after BH adjust. For Anderson-Darling, Z-test, Chi-square test
+
+    '''
+    N, L, C, H, W = Z.shape
+    D = C*H*W
+    Zf = Z.reshape(N, L, D)
+    # z-test
+    z = np.mean(Zf, axis=0) * np.sqrt(N)     # (L, D)
+    pz = 2 * stats.norm.sf(np.abs(z))
+    # chi-square test
+    s2 = np.var(Zf, axis=0, ddof=1)     # (L, D)
+    chi2_stat = (N - 1) * s2
+    cdf = stats.chi2.cdf(chi2_stat, df=N - 1)
+    # idk
+    pchi2 = np.minimum(cdf, 1 - cdf) * 2
+    pz_BH = bh_adjust(pz)
+    pchi2_BH = bh_adjust(pchi2)
+
+    pss = np.empty((L, D))
+    for lead in range(L):
+        for i in range(D):
+            samples = Zf[:, lead, i]                    # (N,)
+            # Shapiro-Wilk normality test
+            _, pss[lead, i] = stats.shapiro(samples)
+
+    # BH correction across all pixels at this lead
+    pss_BH = bh_adjust(pss)
+
+    ratio_ss = (pss_BH < 0.05).mean(axis=1)      # (L,)
+    ratio_z = (pz_BH < 0.05).mean(axis=1)       # (L,)
+    ratio_chi2 = (pchi2_BH < 0.05).mean(axis=1) # (L,)
+
+    plot_rejection_ratio(ratio_ss, ratio_z, ratio_chi2, ds=ds)
+
+    return pss, pz, pchi2
+
+def p_histogram(p, title, flex_scale=False, save=False, fine_bins=False, ds='euler'):
+    assert title in ["z-test", "chi-square", "Sharpiral-Wilk"], "only z-test, chi-square, Sharpiral-Wilk are supported"
+    L, D = p.shape
+    if flex_scale:
+        fig, axes = plt.subplots(4, 6, figsize=(18, 10))
+    else:
+        fig, axes = plt.subplots(4, 6, figsize=(18, 10), sharex=True, sharey=True)
+    n_bins = 40 if fine_bins else 20
+    for lead, ax in enumerate(axes.ravel()[:L]):
+        ax.hist(p[lead], bins=n_bins, range=(0, 1))
+        ax.set_title(f"lead time {lead + 1}")
+    for ax in axes.ravel()[L:]:
+        ax.set_visible(False)
+    fig.suptitle(f"{title} test p-values per lead time")
+    fig.tight_layout()
+    if save:
+        fig.savefig(f"{result_dir(ds)}/{title}_p-values.png")
+    else:
+        plt.show()
+
+
+def mean_band(x):
+    """x: (N, L). Returns mean and 95% CI across trajectories, per lead."""
+    m = x.mean(axis=0)
+    se = x.std(axis=0, ddof=1) / np.sqrt(x.shape[0])
+    return m, m - 1.96 * se, m + 1.96 * se
+
+# global experiment
+def global_parameters(Z):
+    N, L, C, H, W = Z.shape
+    D = C*H*W
+    Zf = Z.reshape(N, L, D)
+
+    mean = np.mean(Zf, axis=2)                       # (N, L)
+    var = np.var(Zf, axis=2, ddof=1)                 # (N, L)
+
+    return mean, var
+
+def plot_global_parameters(zf, ref, save=False, ds='euler'):
+    zf_mean, zf_var = zf
+    ref_mean, ref_var = ref
+
+    L = zf_mean.shape[1]
+    leads = np.arange(1, L + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    zf_mean_m, zf_mean_m_lo, zf_mean_m_hi = mean_band(zf_mean)
+    zf_var_m, zf_var_m_lo, zf_var_m_hi = mean_band(zf_var)
+    ref_mean_m, ref_mean_m_lo, ref_mean_m_hi = mean_band(ref_mean)
+    ref_var_m, ref_var_m_lo, ref_var_m_hi = mean_band(ref_var)
+
+    # Global Mean
+    ax = axes[0]
+    ax.plot(leads, zf_mean_m, marker="o", color="C0", label="Zf")
+    ax.fill_between(leads, zf_mean_m_lo, zf_mean_m_hi, color="C0", alpha=0.3)
+    ax.plot(leads, ref_mean_m, marker="s", color="C1", label="ref (N(0,1))")
+    ax.fill_between(leads, ref_mean_m_lo, ref_mean_m_hi, color="C1", alpha=0.3)
+    ax.axhline(0, color="k", ls="--", lw=0.8)
+    ax.set_xlim(1, L)
+    ax.set_xlabel("lead time")
+    ax.set_ylabel("spatial mean")
+    ax.set_title("Mean over lead time (95% CI)")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    # Global Variance
+    ax = axes[1]
+    ax.plot(leads, zf_var_m, marker="o", color="C0", label="Zf")
+    ax.fill_between(leads, zf_var_m_lo, zf_var_m_hi, color="C0", alpha=0.3)
+    ax.plot(leads, ref_var_m, marker="s", color="C1", label="ref (N(0,1))")
+    ax.fill_between(leads, ref_var_m_lo, ref_var_m_hi, color="C1", alpha=0.3)
+    ax.axhline(1, color="k", ls="--", lw=0.8)
+    ax.set_xlim(1, L)
+    ax.set_xlabel("lead time")
+    ax.set_ylabel("variance")
+    ax.set_title("Variance over lead time (95% CI)")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+    fig.tight_layout()
+    if save:
+        fig.savefig(f"{result_dir(ds)}/Global_Parameters.png")
+    else:
+        plt.show()
+
+def power_spectrum(Z, n_std=1.96, save=False, ds='euler'):
+    """Z: (N, L, C, H, W)."""
+    N, L, C, H, W = Z.shape
+
+    # 2D FFT over (H, W) only, per channel
+    F = np.fft.fft2(Z, axes=(3, 4))
+    power = np.abs(F) ** 2 / (H * W)   # (N, L, C, H, W)
+    power = power.mean(axis=2)          # average over channel -> (N, L, H, W)
+
+    # radial coordinate over the (H, W) plane
+    kh = np.fft.fftfreq(H, d=1.0 / H)
+    kw = np.fft.fftfreq(W, d=1.0 / W)
+    KH, KW = np.meshgrid(kh, kw, indexing='ij')
+    radius = np.sqrt(KH ** 2 + KW ** 2)
+    k_bins = np.arange(0, radius.max() + 1)
+    bin_idx = np.digitize(radius.ravel(), k_bins) - 1
+
+    def radial_average(img):
+        # img: (..., H, W) -> (..., len(k_bins))
+        flat = img.reshape(*img.shape[:-2], H * W)
+        out = np.zeros((*img.shape[:-2], len(k_bins)))
+        counts = np.bincount(bin_idx, minlength=len(k_bins))
+        for b in range(len(k_bins)):
+            mask = bin_idx == b
+            if counts[b] > 0:
+                out[..., b] = flat[..., mask].mean(axis=-1)
+        return out
+
+    p_k = radial_average(power)   # (N, L, n_k)
+    white_noise_level = Z.reshape(N, L, -1).var(axis=2) # (N, L)
+    
+    # CLT mean/band over N trajectories, kept separate per lead l
+    p_mean = np.mean(p_k / white_noise_level[..., None], axis=0)            # (L, n_k)
+    p_se = p_k.std(axis=0) / np.sqrt(N)       # (L, n_k)
+    n_rows, n_cols = 4, 6  # 4*6 = 24 leads
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, 12), sharex=True, sharey=True)
+    axes = axes.ravel()
+
+    for l in range(L):
+        ax = axes[l]
+        ax.plot(k_bins, p_mean[l], color='tab:blue', label='power')
+        ax.fill_between(k_bins, p_mean[l] - n_std * p_se[l],
+                         p_mean[l] + n_std * p_se[l],
+                         color='tab:blue', alpha=0.2)
+        ax.axhline(1, color='gray', linestyle='--', linewidth=1, label='reference')
+        ax.set_title(f'lead time {l+1}', fontsize=9)
+        ax.grid(alpha=0.3)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', ncol=2)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    if save:
+        fig.savefig(f"{result_dir(ds)}/Pixels_Cov.png")
+    else:
+        plt.show()
+
+
+
+
+
+

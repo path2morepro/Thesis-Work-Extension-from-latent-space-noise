@@ -8,3 +8,8 @@ __MACOSX/
 .claude/
 Visual/
 report/
+
+# run_all.sh bookkeeping
+logs/
+archive/
+.run_all.lock

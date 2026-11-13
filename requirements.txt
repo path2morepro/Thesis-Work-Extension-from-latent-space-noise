@@ -38,7 +38,7 @@ Jinja2==3.1.6
 json5==0.14.0
 jsonpointer==3.1.1
 jsonschema==4.26.0
-jsonschema-specifications==ju2025.9.1
+jsonschema-specifications==2025.9.1
 jupyter==1.1.1
 jupyter-console==6.6.3
 jupyter-events==0.12.1

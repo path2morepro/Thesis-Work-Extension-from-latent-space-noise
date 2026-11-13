@@ -1,0 +1,54 @@
+{
+  "arm": "euler_steps=100",
+  "created": "2026-11-12T17:01:23+0100",
+  "device": "cuda",
+  "elapsed_seconds": 12.0,
+  "integrator": "euler",
+  "model": {
+    "path": "/home/trace/Documents/Projects/Thesis/models/randomAnchor_n_24pred_formal_v2.pth",
+    "sha256": "1a48dd3b80bb6a6014ef05083d19870a754837ef51559ae6359a6c4cebaa3338"
+  },
+  "n_computed_this_run": 1,
+  "n_windows": 1,
+  "norm_std": 2660,
+  "order": 1,
+  "source_invert_dir": "/home/trace/Documents/Projects/Thesis/data/invert/from_test",
+  "source_invert_meta": {
+    "anchors": {
+      "1350": [
+        29
+      ]
+    },
+    "anchors_per_traj": 1,
+    "batch_pairs": 5,
+    "created": "2026-11-12T17:00:12+0100",
+    "cuda": "12.1",
+    "data_dir": "/home/trace/Documents/Projects/Thesis/data/test",
+    "device": "cuda",
+    "elapsed_seconds": 12.1,
+    "max_lead": 24,
+    "model": {
+      "bytes": 14333958,
+      "mtime": "2026-11-06T12:44:04",
+      "path": "/home/trace/Documents/Projects/Thesis/models/randomAnchor_n_24pred_formal_v2.pth",
+      "sha256": "1a48dd3b80bb6a6014ef05083d19870a754837ef51559ae6359a6c4cebaa3338"
+    },
+    "n_traj": 1,
+    "order": 1,
+    "outdir": null,
+    "precision": "fp32",
+    "seed": 0,
+    "split": "test",
+    "steps": 100,
+    "tag": null,
+    "torch": "2.5.1+cu121",
+    "torch_compile": false,
+    "windows_adopted": 0,
+    "windows_planned": 1,
+    "windows_todo": 1
+  },
+  "split": "test",
+  "steps": 100,
+  "torch": "2.5.1+cu121",
+  "units": "normalised (truth / NORM_STD=2660)"
+}

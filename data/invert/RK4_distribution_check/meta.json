@@ -1,0 +1,120 @@
+{
+  "anchors": {
+    "1200": [
+      64
+    ],
+    "1201": [
+      48
+    ],
+    "1202": [
+      38
+    ],
+    "1203": [
+      20
+    ],
+    "1204": [
+      23
+    ],
+    "1205": [
+      3
+    ],
+    "1206": [
+      5
+    ],
+    "1207": [
+      1
+    ],
+    "1208": [
+      13
+    ],
+    "1209": [
+      61
+    ],
+    "1210": [
+      49
+    ],
+    "1211": [
+      69
+    ],
+    "1212": [
+      38
+    ],
+    "1213": [
+      46
+    ],
+    "1214": [
+      73
+    ],
+    "1215": [
+      55
+    ],
+    "1216": [
+      48
+    ],
+    "1217": [
+      41
+    ],
+    "1218": [
+      42
+    ],
+    "1219": [
+      71
+    ],
+    "1220": [
+      21
+    ],
+    "1221": [
+      62
+    ],
+    "1222": [
+      50
+    ],
+    "1223": [
+      0
+    ],
+    "1224": [
+      29
+    ],
+    "1225": [
+      65
+    ],
+    "1226": [
+      42
+    ],
+    "1227": [
+      2
+    ],
+    "1228": [
+      58
+    ],
+    "1229": [
+      55
+    ]
+  },
+  "anchors_per_traj": 1,
+  "batch_pairs": 5,
+  "created": "2026-11-08T11:44:35+0100",
+  "cuda": "12.1",
+  "data_dir": "/home/trace/Documents/Projects/Thesis/data/val",
+  "device": "cuda",
+  "elapsed_seconds": 7406.3,
+  "max_lead": 24,
+  "model": {
+    "bytes": 14333958,
+    "mtime": "2026-11-06T12:44:04",
+    "path": "/home/trace/Documents/Projects/Thesis/models/randomAnchor_n_24pred_formal_v2.pth",
+    "sha256": "1a48dd3b80bb6a6014ef05083d19870a754837ef51559ae6359a6c4cebaa3338"
+  },
+  "n_traj": 30,
+  "order": 4,
+  "outdir": "RK4_distribution_check",
+  "precision": "fp32",
+  "seed": 0,
+  "split": "val",
+  "steps": 500,
+  "tag": null,
+  "torch": "2.5.1+cu121",
+  "torch_compile": false,
+  "windows_planned": 30,
+  "windows_todo": 29
+}

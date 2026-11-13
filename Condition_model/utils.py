@@ -4,6 +4,15 @@ from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 
 
+# Output locations, anchored to the repo instead of the working directory.
+# These used to be '../Visual/' and '../Performance/metrics.png', which resolve
+# against cwd: launched from the repo root they wrote one level ABOVE the repo,
+# so the figures ended up outside it.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VISUAL_DIR   = PROJECT_ROOT / 'Visual'
+PERF_DIR     = PROJECT_ROOT / 'Performance'
+
+
 # ============================================================================
 # Metric Computation
 # ============================================================================
@@ -97,19 +106,18 @@ def print_metrics(
 
 
 
-def visualize_results(results, out_dir='../Visual/'):
+def visualize_results(results, out_dir=VISUAL_DIR):
     """
-    Save one GIF per sample. All AR steps are concatenated as sequential frames.
+    Save one GIF per sample, one frame per forecast hour.
 
-    For a sample with 3 AR steps and 24 direct leads:
-        frames 0-23  → AR step 0, hours  1-24
-        frames 24-47 → AR step 1, hours 25-48
-        frames 48-71 → AR step 2, hours 49-72
+    arci already returns its output flat over lead — frame i is +(i+1) h, with
+    the AR re-anchorings (every 24 h) just showing up as kinks in the sequence.
+    There is no window axis to unfold any more.
 
     Args:
-        results : list of (predicts, truth) — one tuple per data sample
-                  predicts : Tensor (n_ar+1, n_lead, ens, levels, H, W)
-                  truth    : Tensor (n_ar+1, n_lead,      levels, H, W)
+        results : list of (predicts, truth) — one tuple per trajectory
+                  predicts : Tensor (n_lead, ens, levels, H, W)
+                  truth    : Tensor (n_lead,      levels, H, W)
         out_dir : directory for output GIFs (created if absent)
 
     Output:  ../Visual/sample00.gif,  sample01.gif, ...
@@ -118,13 +126,11 @@ def visualize_results(results, out_dir='../Visual/'):
     out.mkdir(parents=True, exist_ok=True)
 
     for sample_idx, (predicts, truth) in enumerate(results):
-        n_steps, n_lead = predicts.shape[:2]
-        n_frames        = n_steps * n_lead
-        ar_stride       = n_lead          # last direct lead = AR update stride
+        n_frames = predicts.shape[0]
 
-        # flatten all AR steps: (n_steps*n_lead, H, W) — ens 0, level 0
-        pred_frames  = predicts[:, :, 0, 0].reshape(n_frames, *predicts.shape[-2:])
-        truth_frames = truth[:,   :, 0   ].reshape(n_frames, *truth.shape[-2:])
+        # ens 0, level 0 -> (n_frames, H, W)
+        pred_frames  = predicts[:, 0, 0]
+        truth_frames = truth[:, 0]
 
         vmax = max(pred_frames.abs().max(), truth_frames.abs().max()).item()
         kw   = dict(cmap='RdBu_r', vmin=-vmax, vmax=vmax)
@@ -143,13 +149,10 @@ def visualize_results(results, out_dir='../Visual/'):
 
         def update(i, _im_t=im_t, _im_p=im_p,
                    _tf=truth_frames, _pf=pred_frames):
-            ar_step  = i // n_lead
-            lead_idx = i  % n_lead
-            abs_hour = ar_step * ar_stride + (lead_idx + 1)
             _im_t.set_data(_tf[i].numpy())
             _im_p.set_data(_pf[i].numpy())
             fig.suptitle(
-                f'Sample {sample_idx}  |  AR step {ar_step}  |  +{abs_hour}h',
+                f'Sample {sample_idx}  |  +{i + 1}h',
                 fontsize=10, y=1.02,
             )
             return [_im_t, _im_p]
@@ -163,9 +166,88 @@ def visualize_results(results, out_dir='../Visual/'):
 
 
 
+class MetricAccumulator:
+    """compute_metrics(), but fed one trajectory at a time.
+
+    compute_metrics takes the whole `results` list, which means holding every
+    forecast in RAM at once: at 50 trajectories x (99, 20, 2, 64, 64) float32
+    that is 3.2 GiB, and this laptop has about 4 GiB free. Every quantity it
+    computes is a plain sum over trajectories, so accumulating as each one
+    finishes gives bit-identical numbers for 65 MiB of peak instead.
+
+    Usage:
+        acc = MetricAccumulator()
+        for predicts, truth in ...:
+            acc.add(predicts, truth)
+        metrics = acc.finalize()        # same dict compute_metrics returns
+    """
+
+    def __init__(self):
+        self.n_ens = None
+        self._rmse = np.zeros(0)
+        self._spread = np.zeros(0)
+        self._crps = np.zeros(0)
+        self._counts = np.zeros(0)
+
+    def _grow(self, n):
+        if n <= self._rmse.size:
+            return
+        pad = n - self._rmse.size
+        for name in ('_rmse', '_spread', '_crps', '_counts'):
+            setattr(self, name, np.concatenate([getattr(self, name), np.zeros(pad)]))
+
+    def add(self, predicts, truth):
+        """predicts (n_lead, ens, C, H, W), truth (n_lead, C, H, W)."""
+        p = predicts.numpy() if hasattr(predicts, 'numpy') else np.asarray(predicts)
+        t = truth.numpy() if hasattr(truth, 'numpy') else np.asarray(truth)
+
+        if self.n_ens is None:
+            self.n_ens = p.shape[1]
+        elif self.n_ens != p.shape[1]:
+            raise ValueError(
+                f'ensemble size changed mid-run: {self.n_ens} -> {p.shape[1]}'
+            )
+
+        T = p.shape[0]
+        self._grow(T)
+        # Identical expressions to compute_metrics, so the two agree exactly.
+        self._rmse[:T]   += compute_rmse(p.mean(axis=1), t)
+        self._spread[:T] += np.sqrt(p.var(axis=1, ddof=1).mean(axis=(1, 2, 3)))
+        self._crps[:T]   += compute_crps(p, t)
+        self._counts[:T] += 1
+
+    def finalize(self):
+        if self.n_ens is None:
+            raise ValueError('no trajectories were added')
+        counts = self._counts
+        rmse   = self._rmse / counts
+        spread = self._spread / counts
+        crps   = self._crps / counts
+        n      = self.n_ens
+        return {
+            'rmse':       rmse,
+            'crps':       crps,
+            'ssr':        np.sqrt((n + 1) / n) * spread / (rmse + 1e-8),
+            'spread':     spread,
+            'counts':     counts,
+            'lead_times': np.arange(1, counts.size + 1),
+        }
+
+
 def compute_metrics(results):
-    max_frames = max(p.shape[0] * p.shape[1] for p, t in results)
-    n_ens      = results[0][0].shape[2]
+    """Average RMSE / CRPS / SSR over trajectories, per forecast hour.
+
+    Args:
+        results : list of (predicts, truth) from arci
+                  predicts : Tensor (n_lead, ens, levels, H, W)
+                  truth    : Tensor (n_lead,      levels, H, W)
+
+    arci returns its output already flat over lead, so there is no window axis
+    to collapse here. `counts` is kept because a shorter trajectory (or a later
+    anchor) gives fewer leads, and those entries must not drag the mean down.
+    """
+    max_frames = max(p.shape[0] for p, t in results)
+    n_ens      = results[0][0].shape[1]
 
     rmse_sum   = np.zeros(max_frames)
     spread_sum = np.zeros(max_frames)
@@ -173,10 +255,9 @@ def compute_metrics(results):
     counts     = np.zeros(max_frames)
 
     for predicts, truth in results:
-        n_steps, n_lead = predicts.shape[:2]
-        T = n_steps * n_lead
-        p = predicts.reshape(T, *predicts.shape[2:]).numpy()
-        t = truth.reshape(T, *truth.shape[2:]).numpy()
+        T = predicts.shape[0]
+        p = predicts.numpy()
+        t = truth.numpy()
 
         rmse_sum[:T]   += compute_rmse(p.mean(axis=1), t)
         spread_sum[:T] += np.sqrt(p.var(axis=1, ddof=1).mean(axis=(1,2,3)))
@@ -197,7 +278,10 @@ def compute_metrics(results):
     }
 
 
-def plot_metrics(metrics, out_path='../Performance/metrics.png'):
+def plot_metrics(metrics, out_path=None):
+    out_path = Path(out_path) if out_path is not None else PERF_DIR / 'metrics.png'
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
     lead_times = metrics['lead_times']
     counts     = metrics['counts']
     valid      = counts > 0
@@ -218,4 +302,51 @@ def plot_metrics(metrics, out_path='../Performance/metrics.png'):
     plt.suptitle(f'Metrics over lead time — {int(counts[0])} samples', fontsize=11)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
-    plt.show()
+    print(f'Saved metrics plot -> {out_path}')
+    plt.close(fig)
+
+
+def compute_scalar_alpha(Z):
+    """
+    Lag-1 correlation corr(z_{t-1}, z_t).
+
+    Args:
+        Z: array (N, T, 2, 64, 64)
+
+    Returns:
+        alpha in [-1, 1]
+    """
+    Z = np.asarray(Z, dtype=np.float64).reshape(Z.shape[0], Z.shape[1], -1)
+    Zp, Zc = Z[:, :-1], Z[:, 1:]                   # (N, T-1, D)
+
+    cov = np.einsum("ntx,ntx->nt", Zp, Zc)
+    vp  = np.einsum("ntx,ntx->nt", Zp, Zp)
+    vc  = np.einsum("ntx,ntx->nt", Zc, Zc)
+
+    covs = np.sum(cov, axis=(0,1))
+    vps = np.sum(vp, axis=(0,1))
+    vcs = np.sum(vc, axis=(0,1))
+
+    return covs / np.sqrt(vps * vcs)              # scalar
+
+
+def load_invert(dir):
+    """Load every inverted-latent file in one directory.
+
+    Args:
+        dir_ : directory of invert_traj{T}initial{A}.npy files. Each file is ONE window
+               = one (trajectory T, anchor A) pair holding leads tau = 1..24.
+
+    Returns:
+        Z     : (N, L, C, H, W) float32 — latents, already in normalised model units.
+                The dataset divided by NORM_STD before the inversion; never divide again.
+        traj  : (N,) int — trajectory id per window. LOCAL to the val split (files[400:]),
+                so index SQGLeadTimeDataset(split='val').data with it, never a 500-file set.
+        anch  : (N,) int — anchor frame per window; lead k pairs with frame anch + 1 + k.
+    """
+    files = natsorted(Path(dir).glob('invert_traj*initial*.npy'))
+    assert files, f'no invert_traj*initial*.npy in {dir}'
+    Z    = np.stack([np.load(f).astype(np.float32) for f in files])
+    meta = np.array([[int(m.group(1)), int(m.group(2))] for f in files
+                     for m in [re.search(r'invert_traj(\d+)initial(\d+)', f.name)]])
+    return Z, meta[:, 0], meta[:, 1]
