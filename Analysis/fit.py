@@ -341,9 +341,9 @@ def plot_loss(history, path):
     ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
                label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
     ax.set_xlabel('Epoch')
-    ax.set_ylabel('Negative Likehood Function')
+    ax.set_ylabel('Negative Log-Likelihood')
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=150)
+    plt.close(fig)
 
-    return fig, ax
