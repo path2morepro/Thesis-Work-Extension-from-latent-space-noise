@@ -68,6 +68,13 @@ DF_ARMS=${DF_ARMS:-"uncorrelated_noise:0 fixed_noise:1"}
 # Step two. Each arm is an --arm key of Condition_model.ou_forecast, which names
 # both the fitted model and the output folder. Empty runs step one only.
 DF_OU_ARMS=${DF_OU_ARMS:-"ou_no_x0 ou_x0"}
+# Arms to recompute from scratch even though their windows are already on disk,
+# as a space-separated list of names. The arm's windows and metric files are
+# DELETED and regenerated -- same windows, same seeds, same innovations, since
+# none of those depend on the model -- which is how you swap a model and
+# replace that arm's output. Its old meta.json and curve are copied into the
+# run's log directory first. Everything else still resumes.
+DF_FORCE=${DF_FORCE:-}
 DF_SPLIT=${DF_SPLIT:-test}    # the chains were fitted on val, so test is held out
 DF_TRAJ=${DF_TRAJ:-50}        # windows per arm = DF_TRAJ * DF_ANCHORS
 DF_ANCHORS=${DF_ANCHORS:-1}   # 1 = every window from a different trajectory
@@ -120,6 +127,8 @@ arm_label() {     # what distinguishes this arm, for the log and for status
 # seconds for `left` windows at this arm's cost
 arm_secs() { awk -v w="$1" -v e="$DF_ENS" -v l="$DF_LEADS" -v n="$DF_STEPS" \
                  -v q="$DF_RATE" 'BEGIN{printf "%d", w*e*l*n/q}'; }
+
+arm_forced() { case " $DF_FORCE " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 # ── inspection commands (run in the user's shell, not the job) ───────────
 cmd_status() {
@@ -278,22 +287,35 @@ check_workspace() {
 # Every OU arm needs its checkpoint before anything starts: three hours into a
 # run is a bad moment to find out a file is missing.
 check_models() {
-    local missing=''
+    local arms=''
     for _arm in "${ALL_ARMS[@]}"; do
-        [[ "$(arm_kind "$_arm")" == ou ]] || continue
-        local ck
-        case "$(arm_param "$_arm")" in
-            ou_no_x0) ck='Analysis/Models/time_varyingOU_withoutx0.pt' ;;
-            ou_x0)    ck='Analysis/Models/c2_euler.pt' ;;
-            *)        log "FATAL: unknown OU arm: $(arm_param "$_arm")"
-                      set_status failed 0 models; exit 1 ;;
-        esac
-        [[ -f "$ROOT/$ck" ]] || missing+=" $ck"
+        [[ "$(arm_kind "$_arm")" == ou ]] && arms+=" $(arm_param "$_arm")"
     done
-    if [[ -n "$missing" ]]; then
-        log "FATAL: missing checkpoint(s):$missing"
+    [[ -n "$arms" ]] || return 0
+    # Ask ou_forecast itself where each checkpoint is. A second copy of those
+    # paths here would go stale the moment an arm's model is swapped, and this
+    # also proves the import works before a two-hour run starts.
+    local out rc=0
+    out=$("$PY" -c '
+import sys
+from Condition_model.ou_forecast import ARMS
+bad = []
+for a in sys.argv[1:]:
+    if a not in ARMS:
+        bad.append("unknown OU arm: " + a + " (have " + ", ".join(sorted(ARMS)) + ")")
+    elif not ARMS[a]["ckpt"].exists():
+        bad.append("missing checkpoint: " + str(ARMS[a]["ckpt"]))
+    else:
+        print("model              " + a + " -> " + ARMS[a]["ckpt"].name)
+if bad:
+    print("\n".join(bad))
+    sys.exit(1)
+' $arms 2>&1) || rc=$?
+    while IFS= read -r _l; do [[ -n "$_l" ]] && log "$_l"; done <<< "$out"
+    if [[ $rc -ne 0 ]]; then
+        log "FATAL: OU arm check failed"
         set_status failed 0 models
-        notify failed "Missing checkpoint(s):$missing"
+        notify failed "OU arm check failed"
         exit 1
     fi
 }
@@ -318,6 +340,7 @@ ens=$DF_ENS leads=1..$DF_LEADS steps=$DF_STEPS seed=$DF_SEED"
         nm="$(arm_name "$_arm")"; dir="$(arm_dir "$_arm")"
         have=$(count_files "$ROOT/$dir" '*_predicts.npy')
         left=$(( want > have ? want - have : 0 ))
+        arm_forced "$nm" && left=$want              # forced: recompute all of them
         secs=$(arm_secs "$left")
         total=$(( total + secs ))
         left_total=$(( left_total + left ))
@@ -343,7 +366,24 @@ $left to do  ~$(fmt $secs)  -> $dir"
         # complete arm that lacks it gets a read-only pass over its saved
         # windows -- no GPU, no sampler, and metrics.npz is left alone.
         local tdonly=0
-        if [[ "$have" -ge "$want" ]]; then
+        if arm_forced "$nm"; then
+            # Clearing beats --no-resume. Overwriting in place rewrites the
+            # windows one at a time, so a crash halfway leaves an arm that is
+            # part new and part old, while meta.json and the curve -- both
+            # written at the END -- still describe the OLD model. The next run
+            # would then see want/want windows and skip it. Clearing makes a
+            # crash resumable and keeps the folder honest about what it holds.
+            log "    $nm is FORCED: clearing $have windows and its metric files"
+            mkdir -p "$RUN_DIR/prev-$nm"
+            for _f in meta.json temporal_difference.npz metrics.npz; do
+                [[ -e "$ROOT/$dir/$_f" ]] && cp -p "$ROOT/$dir/$_f" "$RUN_DIR/prev-$nm/" || true
+            done
+            rm -f "$ROOT/$dir"/*_predicts.npy "$ROOT/$dir"/*_truth.npy \
+                  "$ROOT/$dir"/meta.json "$ROOT/$dir"/metrics.npz \
+                  "$ROOT/$dir"/metrics.png "$ROOT/$dir"/temporal_difference.npz
+            log "    old meta / curve kept in $(basename "$RUN_DIR")/prev-$nm"
+            have=0
+        elif [[ "$have" -ge "$want" ]]; then
             if [[ -e "$ROOT/$dir/temporal_difference.npz" ]]; then
                 log "=== stage $n/$TOTAL  $nm  SKIP (complete: $have/$want on disk)"
                 echo "$nm" >> "$RUN_DIR/completed"

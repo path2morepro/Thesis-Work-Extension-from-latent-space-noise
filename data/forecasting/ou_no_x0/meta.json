@@ -154,9 +154,9 @@
     ]
   },
   "anchors_per_traj": 1,
-  "created": "2026-11-15T13:59:48+0100",
+  "created": "2026-11-21T18:10:23+0100",
   "device": "cuda",
-  "elapsed_seconds": 6350.2,
+  "elapsed_seconds": 6452.0,
   "ens": 10,
   "integrator": "euler",
   "kind": "direct forecast, no arci: each lead its own map from one anchor",
@@ -164,10 +164,10 @@
     "class": "TimeVaryingOU",
     "fit_data": "data/invert/from_val (Euler latents, val split)",
     "kind": "ou_no_x0",
-    "model": "Analysis/Models/time_varyingOU_withoutx0.pt",
-    "note": "c2(lead, ch, y): no x0 anywhere; alpha is flat across the box to ~1%",
-    "sha256": "0df453584dfa93d7513b964c728566eeb81c20bdbd7beb2c00a0e32a2ecd3d21",
-    "val_nll": 0.08704
+    "model": "Analysis/Models/c2_euler_withoutx0.pt",
+    "note": "c2(lead, ch, y), two Fourier modes in y: no x0 anywhere",
+    "sha256": "196dc90d6b1c406b56e06b5860cef46ae901d57289af71668c4195c23b9ebdf1",
+    "val_nll": 0.08694
   },
   "metric_files": [
     "temporal_difference.npz"
