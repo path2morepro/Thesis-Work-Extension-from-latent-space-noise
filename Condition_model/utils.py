@@ -330,23 +330,3 @@ def compute_scalar_alpha(Z):
     return covs / np.sqrt(vps * vcs)              # scalar
 
 
-def load_invert(dir):
-    """Load every inverted-latent file in one directory.
-
-    Args:
-        dir_ : directory of invert_traj{T}initial{A}.npy files. Each file is ONE window
-               = one (trajectory T, anchor A) pair holding leads tau = 1..24.
-
-    Returns:
-        Z     : (N, L, C, H, W) float32 — latents, already in normalised model units.
-                The dataset divided by NORM_STD before the inversion; never divide again.
-        traj  : (N,) int — trajectory id per window. LOCAL to the val split (files[400:]),
-                so index SQGLeadTimeDataset(split='val').data with it, never a 500-file set.
-        anch  : (N,) int — anchor frame per window; lead k pairs with frame anch + 1 + k.
-    """
-    files = natsorted(Path(dir).glob('invert_traj*initial*.npy'))
-    assert files, f'no invert_traj*initial*.npy in {dir}'
-    Z    = np.stack([np.load(f).astype(np.float32) for f in files])
-    meta = np.array([[int(m.group(1)), int(m.group(2))] for f in files
-                     for m in [re.search(r'invert_traj(\d+)initial(\d+)', f.name)]])
-    return Z, meta[:, 0], meta[:, 1]

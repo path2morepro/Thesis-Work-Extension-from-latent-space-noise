@@ -1,29 +1,3 @@
-"""Round trip: data -> latent -> data, one arm per (steps, order).
-
-The backward half is NOT done here. generate_invert_data writes the latents; this
-script reads one of its directories, pushes every window forward through the SAME
-integrator at the SAME step count, and pairs the result with the truth it came from.
-Matching the two halves is the point: a mixed pair (invert with RK4, return with
-Euler) measures neither integrator.
-
-Nothing is chained. Each lead is its own map Phi(x0, tau) from the SAME anchor, so
-lead 24 is not built from lead 23. A rising curve is therefore error accumulating
-along one ODE solve, NOT error feeding back on itself.
-
-Everything is in NORMALISED model units: the latents already are, and dividing the
-truth by NORM_STD puts it on the same axis.
-
-WHAT THIS DOES AND DOES NOT SHOW. Backward-then-forward with one solver at one step
-count partially cancels its own local error, so a small residual here does not prove
-the inversion is faithful -- it proves the composition is self-consistent. Whether
-the latents are right is a different question, answered by their per-lead variance.
-
-Run from the repository root:
-
-    PYTHONPATH=. python Analysis/round_trip.py --split test --steps 100 --order 1
-    PYTHONPATH=. python Analysis/round_trip.py --split test --steps 500 --order 4
-    PYTHONPATH=. python Analysis/round_trip.py --plot          # figure, after the runs
-"""
 import argparse
 import hashlib
 import json
