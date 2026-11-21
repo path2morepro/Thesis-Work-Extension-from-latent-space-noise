@@ -12,7 +12,8 @@ from torch.utils.data import DataLoader
 
 from .samplers import CondSampler
 from .train import SAVE_PATH
-from .dataset import SQGLeadTimeDataset, SQGDataset, DATA_PATH, DATA_TEST, DATA_test
+from .dataset import (SQGLeadTimeDataset, SQGDataset, DATA_PATH, DATA_TRAIN,
+                      DATA_VAL, DATA_TEST, DATA_test)
 from .utils import plot_metrics, print_metrics, MetricAccumulator
 
 
@@ -483,6 +484,310 @@ def perform_forecasting(eval_traj_num=50, ens=20, alpha=ALPHA_CONST, n_micro=4,
 
     print(f'\nSaved {n_traj} samples to {save_dir} in {elapsed/3600:.2f} h')
     print(f'  metrics.png / metrics.npz / meta.json written')
+    return save_dir
+
+
+# ── direct (non-ARCI) forecasting, one anchor per window, leads 1..24 ────────
+# Two noise arms on the SAME windows and the SAME innovation stream, differing
+# only in alpha. These are the two EXTREMES of the variance-preserving chain
+# z_t = a z_{t-1} + sqrt(1-a^2) eps_t:
+#     uncorrelated   alpha = 0.0   z_t = eps_t    an independent latent per lead
+#     fixed          alpha = 1.0   z_t = z_{t-1}  the SAME latent at every lead
+# At alpha=1 the sqrt(1-a^2) factor is exactly 0, so the innovations are still
+# DRAWN and then discarded. That is what keeps the two arms paired: both consume
+# the RNG identically, so z_1 is bit-identical and only the chain differs.
+# Nothing is chained in the PHYSICAL state: every lead is its own map
+# Phi(x0, tau) from the same anchor, which is what "no arci" means here.
+
+class TDiffAccumulator:
+    """Mean |x_k - x_{k-1}| per lag, over windows, members and pixels.
+
+    The temporal difference of the CRPI appendix, the same quantity as
+    Analysis/utils.temporal_difference, but accumulated one window at a time
+    instead of stacking every window into memory (50 x 24 x 10 x 2 x 64 x 64
+    floats is 393 MB). Every window has the same leads, members and pixels, so
+    the mean of per-window means is exactly the mean over everything.
+
+    finalize() returns the predicted and the truth curve, each (n_lead - 1,),
+    indexed by lag 1..n_lead-1.
+    """
+    def __init__(self):
+        self.pred = self.truth = None
+        self.n = 0
+
+    def add(self, pred, truth):
+        p = np.asarray(pred,  dtype=np.float64)     # (L, ens, C, H, W)
+        t = np.asarray(truth, dtype=np.float64)     # (L, C, H, W)
+        dp = np.abs(np.diff(p, axis=0)).mean(axis=(1, 2, 3, 4))
+        dt = np.abs(np.diff(t, axis=0)).mean(axis=(1, 2, 3))
+        if self.pred is None:
+            self.pred, self.truth = dp, dt
+        else:
+            self.pred  = self.pred + dp
+            self.truth = self.truth + dt
+        self.n += 1
+
+    def finalize(self):
+        assert self.n, 'no windows accumulated'
+        return {'lags':       np.arange(1, len(self.pred) + 1),
+                'pred_tdiff': self.pred / self.n,
+                'truth_tdiff': self.truth / self.n,
+                'n_windows':  np.array(self.n)}
+
+
+def _window_seed(seed, traj_id, anchor):
+    """Deterministic per-window torch seed.
+
+    Seeding per window, not once per run, is what makes the two noise arms a
+    PAIRED comparison: get_latents draws z[0] and then one innovation per lead
+    from the global RNG, so re-seeding identically before each call gives both
+    arms bit-identical draws and leaves alpha as the only difference. It also
+    makes a resumed run reproduce the windows it already has.
+    """
+    return (int(seed) * 1_000_003 + int(traj_id) * 1009 + int(anchor)) % (2**31 - 1)
+
+
+def perform_direct_forecasting(
+    split='test', n_traj=50, anchors_per_traj=1, ens=10, alpha=0.0,
+    n_lead=24, steps=100, micro_ens=5, seed=0, model_path=SAVE_PATH,
+    dirname=None, device=None, resume=True,
+    latent_fn=None, latent_meta=None, plot=True,
+    metrics=True, tdiff=False,
+):
+    '''Direct forecast of leads 1..n_lead from one anchor, for n_traj windows.
+
+    Args:
+        split            : which split to forecast. 'test' is the held-out one;
+                           alpha was measured on val, so test keeps this honest.
+        n_traj           : trajectories to use. Windows per arm is
+                           n_traj * anchors_per_traj.
+        anchors_per_traj : 1 means every window comes from a different
+                           trajectory and shares no frames. Anchors come from
+                           generate_invert_data.choose_anchors, so they are
+                           nested in k and keyed on (seed, traj_id) only --
+                           both arms therefore draw the SAME windows, and
+                           raising either count only costs the new windows.
+        ens              : ensemble members. 10 members x 24 leads = 240 rows;
+                           at 0.0144 GiB/row that is 4.2 GiB in one call, which
+                           fits a 6 GB card but leaves nothing spare, hence
+                           micro_ens.
+        alpha            : latent chain correlation. 0.0 uncorrelated (a
+                           fresh latent each lead), 1.0 fixed (one latent
+                           reused at every lead). ALPHA_CONST (0.7133258747)
+                           is the measured lag-1, if ever wanted in between.
+        micro_ens        : members per forward call. 5 -> 120 rows -> 2.2 GiB.
+                           Members are independent given the latents, so this
+                           changes nothing numerically; the full ens latents are
+                           drawn FIRST and then sliced, so the draw does not
+                           depend on the chunking.
+        steps            : Euler steps for the forward ODE
+        latent_fn        : where the latents come from. None = the constant-alpha
+                           chain above. Otherwise a callable
+                               latent_fn(x0, ens, n_lead, device) -> (ens,L,C,H,W)
+                           called AFTER the per-window seed is set, so any latent
+                           source inherits the pairing. `alpha` is then ignored
+                           and recorded as null. See ou_forecast.py for the
+                           fitted time-varying OU arms.
+        latent_meta      : dict describing latent_fn, written to meta.json and
+                           checked on resume the way alpha is.
+        metrics          : compute rmse / crps / ssr into metrics.npz.
+        tdiff            : compute the temporal difference, mean |x_k - x_k-1|
+                           per lag over windows, members and pixels, into
+                           temporal_difference.npz. Same quantity as
+                           Analysis/utils.temporal_difference.
+        plot             : write metrics.png (needs metrics). Never plots tdiff.
+        resume           : skip windows whose two output files already exist
+
+    Writes into data/forecasting/<dirname>/:
+        traj{T}initial{A}_predicts.npy   (n_lead, ens, C, H, W) normalised
+        traj{T}initial{A}_truth.npy      (n_lead, C, H, W)      normalised
+        metrics.npz / metrics.png        rmse, crps, ssr, spread, counts
+        meta.json                        alpha, ens, steps, model, anchors
+
+    Returns the directory written to.
+    '''
+    from .generate_invert_data import choose_anchors, existing_anchors
+
+    device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # alpha describes the latent chain only when the built-in one is used
+    alpha_val = None if latent_fn is not None else float(alpha)
+    if dirname is None:
+        assert latent_fn is None, 'pass dirname when you pass latent_fn'
+        dirname = ('uncorrelated_noise' if alpha_val == 0.0 else
+                   'fixed_noise'        if alpha_val == 1.0 else
+                   'correlated_noise')
+    save_dir = DATA_PATH / 'forecasting' / dirname
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    split_dir = {'train': DATA_TRAIN, 'val': DATA_VAL, 'test': DATA_TEST}[split]
+    ds = SQGDataset(split_dir, limit=n_traj)
+
+    # Provenance guard. resume ADDS to what is already here, so a folder must
+    # keep meaning one arm: mixing alpha=0 and alpha=0.713 windows would make
+    # metrics.npz an average over two different experiments.
+    prev = save_dir / 'meta.json'
+    if resume and prev.exists():
+        pm, bad = json.loads(prev.read_text()), []
+        new_sha = _sha256(model_path)
+        old_sha = pm.get('model', {}).get('sha256')
+        if old_sha and old_sha != new_sha:
+            bad.append(f'model {old_sha[:16]}... != {new_sha[:16]}...')
+        for k, v in (('alpha', alpha_val), ('ens', ens), ('steps', steps),
+                     ('n_lead', n_lead), ('split', split)):
+            if pm.get(k) is not None and pm.get(k) != v:
+                bad.append(f'{k} {pm.get(k)} != {v}')
+        # The latent source, same rule: one folder means one arm. Folders written
+        # before latent_fn existed have no 'latent' key, and compare equal to the
+        # built-in chain, which is what wrote them.
+        old_lat, new_lat = pm.get('latent') or {}, latent_meta or {}
+        for k in ('kind', 'sha256'):
+            if old_lat.get(k) != new_lat.get(k):
+                bad.append(f'latent {k} {old_lat.get(k)} != {new_lat.get(k)}')
+        if bad:
+            raise SystemExit(f'{save_dir} was written with different settings:\n'
+                             + ''.join(f'  - {b}\n' for b in bad)
+                             + 'Move it aside, or pass --no-resume.')
+
+    # Windows but no meta.json: the folder is from a run that was stopped before
+    # it could write one (perform_direct_forecasting writes meta at the END), so
+    # the guard above had nothing to compare. Say so rather than adopting them
+    # silently -- the meta written this time will claim THIS run's alpha for all
+    # of them.
+    n_on_disk = len(list(save_dir.glob('*_predicts.npy')))
+    if resume and n_on_disk and not prev.exists():
+        print(f'  NOTE: {save_dir} holds {n_on_disk} windows but no meta.json '
+              f'(interrupted run); adopting them as '
+              f"{latent_meta['kind'] if latent_meta else f'alpha={alpha_val}'}.")
+
+    plan = []
+    for i in range(len(ds)):
+        traj, tid = ds[i]
+        tid = int(tid)
+        have = existing_anchors(save_dir, tid) if resume else []
+        for a in choose_anchors(traj.shape[0], anchors_per_traj, n_lead,
+                                seed, tid, have):
+            plan.append((i, tid, int(a)))
+
+    def paths_for(tid, a):
+        return (save_dir / f'traj{tid}initial{a}_predicts.npy',
+                save_dir / f'traj{tid}initial{a}_truth.npy')
+
+    todo = [w for w in plan
+            if not (resume and all(p.exists() for p in paths_for(w[1], w[2])))]
+
+    rows_per_window = ens * n_lead
+    print(f'{dirname}: {len(plan)} windows, {len(todo)} to compute')
+    print(f'  split={split} alpha={alpha} ens={ens} leads=1..{n_lead} '
+          f'steps={steps} device={device}')
+    print(f'  {rows_per_window} rows/window in chunks of {micro_ens * n_lead} '
+          f'({micro_ens} members)')
+    print(f'  -> {save_dir}')
+
+    sampler = CondSampler(model_path=model_path, device=device,
+                          steps=steps) if todo else None
+
+    acc, tacc = MetricAccumulator(), TDiffAccumulator()
+    t0 = time.time()
+    for n, (i, tid, a) in enumerate(tqdm(plan, total=len(plan), desc='forecast'), 1):
+        pred_path, truth_path = paths_for(tid, a)
+        if resume and pred_path.exists() and truth_path.exists():
+            # a finished window still counts towards every curve
+            p, t = (np.load(pred_path,  mmap_mode='r'),
+                    np.load(truth_path, mmap_mode='r'))
+            if metrics:
+                acc.add(p, t)
+            if tdiff:
+                tacc.add(p, t)
+            continue
+
+        traj  = ds[i][0]
+        x0    = traj[a]                                  # (C,H,W) normalised
+        truth = traj[a + 1: a + 1 + n_lead]              # (L,C,H,W) normalised
+        assert truth.shape[0] == n_lead, (
+            f'traj {tid} anchor {a}: only {truth.shape[0]} of {n_lead} leads available')
+        C, H, W = x0.shape
+
+        # Draw the FULL ensemble first, then slice, so the latents do not depend
+        # on micro_ens. Seeded per window -> identical across every arm.
+        torch.manual_seed(_window_seed(seed, tid, a))
+        if latent_fn is None:
+            z = get_latents((ens, C, H, W), n_lead, alpha=alpha_val, device=device)
+            z = z.reshape(ens, n_lead, C, H, W)
+        else:
+            z = latent_fn(x0, ens, n_lead, device)
+            assert z.shape == (ens, n_lead, C, H, W), \
+                f'latent_fn returned {tuple(z.shape)}, want {(ens, n_lead, C, H, W)}'
+
+        parts = []
+        for s in range(0, ens, micro_ens):
+            chunk = z[s:s + micro_ens]                   # (m,L,C,H,W)
+            parts.append(just_forecasting(
+                chunk.unsqueeze(0), x0, sampler).squeeze(0))   # (m,L,C,H,W)
+        pred = torch.cat(parts, dim=0).transpose(0, 1).contiguous()   # (L,ens,C,H,W)
+
+        np.save(pred_path,  pred.numpy())
+        np.save(truth_path, truth.numpy())
+        if metrics:
+            acc.add(pred, truth)
+        if tdiff:
+            tacc.add(pred, truth)
+        del z, parts, pred
+
+    written = []
+    if metrics:
+        m = acc.finalize()
+        np.savez(save_dir / 'metrics.npz', **m)
+        written.append('metrics.npz')
+        if plot:
+            plot_metrics(m, out_path=save_dir / 'metrics.png')
+            written.append('metrics.png')
+        print_metrics(m['lead_times'], m['rmse'], m['crps'], m['ssr'])
+    if tdiff:
+        td = tacc.finalize()
+        np.savez(save_dir / 'temporal_difference.npz', **td)
+        written.append('temporal_difference.npz')
+        print(f"temporal difference over {int(td['n_windows'])} windows "
+              f'(mean |x_k - x_k-1|, no plot):')
+        print('  lag   forecast     truth')
+        for lag, pv, tv in zip(td['lags'], td['pred_tdiff'], td['truth_tdiff']):
+            print(f'  {int(lag):3d}   {pv:.6f}   {tv:.6f}')
+
+    elapsed = time.time() - t0
+    (save_dir / 'meta.json').write_text(json.dumps({
+        'created':   time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+        'kind':      'direct forecast, no arci: each lead its own map from one anchor',
+        'split':     split,
+        'alpha':     alpha_val,
+        'alpha_note': {0.0: 'uncorrelated: an independent latent at every lead',
+                       1.0: 'fixed: the SAME latent at every lead',
+                       None: 'latents come from latent_fn, see "latent"'}.get(
+                           alpha_val, 'variance-preserving AR(1) latent chain'),
+        'latent':    latent_meta or {'kind': 'const_alpha', 'alpha': alpha_val},
+        'ens':       ens,
+        'n_lead':    n_lead,
+        'steps':     steps,
+        'order':     1,
+        'integrator': 'euler',
+        'n_traj':    len(ds),
+        'anchors_per_traj': anchors_per_traj,
+        'n_windows': len(plan),
+        'n_computed_this_run': len(todo),
+        'micro_ens': micro_ens,
+        'seed':      seed,
+        'units':     f'normalised (field / NORM_STD), truth from {split_dir}',
+        'elapsed_seconds': round(elapsed, 1),
+        'metric_files': sorted(
+            f.name for f in save_dir.iterdir()
+            if f.name in ('metrics.npz', 'metrics.png', 'temporal_difference.npz')),
+        'model': {'path': str(model_path), 'sha256': _sha256(model_path)},
+        'torch': torch.__version__,
+        'device': str(device),
+        'anchors': {str(t): sorted(x for _, tt, x in plan if tt == t)
+                    for t in sorted({t for _, t, _ in plan})},
+    }, indent=2, sort_keys=True))
+
+    print(f'\n{len(plan)} windows in {save_dir}  ({elapsed/3600:.2f} h this run)')
+    print('  ' + ' / '.join(written + ['meta.json']) + ' written')
     return save_dir
 
 

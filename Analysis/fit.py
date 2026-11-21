@@ -1,59 +1,54 @@
+
 from utils import *
 import math
 import numpy as np
 import torch
-from torch.nn.functional import silu
+from torch.nn.functional import silu, softplus
 
 invert_euler960 = ROOT.parent / 'data' / 'invert' / 'from_val'
 invert_rk4150 = ROOT.parent / 'data' / 'invert' / 'from_val_rk4'
-model_save_path = ROOT / "Analysis" / "Models"
+model_save_path = ROOT / 'Models'                     # ROOT is already the Analysis folder
+result_path = ROOT / 'Result'
 
+
+# ----------------------------------------------------------------------------- data
 class TrajDataset():
-    """Point-wise loss, trajectory-wise batches, plus the initial state x0 of every window.
+    """Trajectory-wise batches on the factored (lead, ch, x, y) grid.
 
-    The (lead, ch, x, y) grid is the same for every trajectory, 
-    so it is built once
-    (flattened to P = (L-1)*C*H*W points). 
-    z_prev / z_next are (n_traj, P) 
-    and the point-wise loss broadcasts over the trajectory dim. 
-    OPTIONAL x0 is (n_traj, 2, 64, 64): the physical field at the anchor time, standardize in get_windows()
-    """
-    def __init__(self, path, split, device, traj_per_batch=8, physical_dir=ROOT.parent / 'data' / 'val', condition=False):
+    Z: (n, L, C, H, W) latents of the split, kept as is (no flattening, no index arrays).
+    lead: (K,) = leads 2..L of the transitions; Z index k is lead k+1, so z_next = Z[:, 1:] is at `lead`.
+    Optional X0 (condition=True): (n, 2, 64, 64) physical state at the anchor, standardised in get_window().
+    A batch is (lead, z_prev, z_next, x0) with z_prev / z_next of shape (b, K, C, H, W) and x0 None
+    when condition=False."""
+    def __init__(self, path, split, device, traj_per_batch=8, physical_dir=ROOT.parent / 'data' / 'val',
+                 condition=False, train_frac=0.8):
         Z, traj_ids, anchors = load_invert(path)
-        meta = torch.tensor(np.stack([traj_ids, anchors], 1))
-        N, L, C, H, W = Z.shape
-        N = int(N*0.8)
-        Z = Z[:N] if split == 'train' else Z[N:]                        # split Z exactly once
+        n_train = int(len(Z) * train_frac)
+        part = slice(None, n_train) if split == 'train' else slice(n_train, None)   # split exactly once
+
+        self.Z = torch.from_numpy(Z[part]).to(device)                   # (n, L, C, H, W)
         if condition:
-            _, X0 = get_window(meta, physical_dir)                          # (N, 2, 64, 64)
-            X0 = X0[:N] if split == 'train' else X0[N:]
-            self.X0 = X0.float().to(device)
+            meta = torch.tensor(np.stack([traj_ids[part], anchors[part]], 1))
+            _, X0 = get_window(meta, physical_dir)                      # only this split's windows are read
+            self.X0 = X0.float().to(device)                             # (n, 2, 64, 64)
         else:
-            self.X0 = None                                              # x0-free: batches carry x0 = None
+            self.X0 = None
 
-        self.Z = torch.from_numpy(Z).to(device)                         # (n, L, C, H, W)
         self.n, self.L, self.C, self.H, self.W = self.Z.shape
-        self.P = (L - 1) * C * H * W
-        self.size = self.n * self.P                                     # number of loss terms per epoch
-        self.traj_per_batch = traj_per_batch                            # batch size
-
-        t, ch, x, y = torch.meshgrid(torch.arange(L - 1), torch.arange(C), torch.arange(H), torch.arange(W), indexing='ij')
-        self.lead = (t.reshape(-1) + 2).float().to(device)              # Z index t+1 is lead t+2
-        self.ch = ch.reshape(-1).to(device)
-        self.x = x.reshape(-1).float().to(device)
-        self.y = y.reshape(-1).float().to(device)
+        self.lead = torch.arange(2, self.L + 1, dtype=torch.float32, device=device)   # (K,), K = L-1
+        self.size = self.n * (self.L - 1) * self.C * self.H * self.W   # number of loss terms per epoch
+        self.traj_per_batch = traj_per_batch                            # batch size in trajectories
 
     def iterate_batches(self):
-        # one call=sample once with replacement
+        # one pass over the split in random order, without replacement
         perm = torch.randperm(self.n, device=self.Z.device)
         for start in range(0, self.n, self.traj_per_batch):
             idx = perm[start:start + self.traj_per_batch]
             z = self.Z[idx]                                             # (b, L, C, H, W)
-            yield (self.lead, self.ch, self.x, self.y,
-                   z[:, :-1].reshape(len(idx), -1), z[:, 1:].reshape(len(idx), -1),
-                   None if self.X0 is None else self.X0[idx])
+            yield self.lead, z[:, :-1], z[:, 1:], None if self.X0 is None else self.X0[idx]
 
 
+# ----------------------------------------------------------------------------- embeddings
 class PositionalEmbedding(torch.nn.Module):
     def __init__(self, num_channels, max_positions=24, endpoint=False):
         super().__init__()
@@ -65,7 +60,7 @@ class PositionalEmbedding(torch.nn.Module):
         #FROMTRACE:
         # num_channels decide how long the output will be
         # max_position decides the slowest wave
-        
+
         # Define the frequencies domain from [0, num_channels//2]
         # Normalise the frequencies domain to [0, 1]
         # For each f: x = x * max_positions^(-f)
@@ -83,7 +78,7 @@ class FourierEmbedding(torch.nn.Module):
         super().__init__()
         n_freq = num_channels // 2                    # F = num_channels / 2
         freqs = torch.arange(1, n_freq + 1, dtype=torch.float32) / period
-        self.register_buffer('freqs', freqs)   
+        self.register_buffer('freqs', freqs)
 
     def forward(self, x):
         # Outer product
@@ -91,44 +86,61 @@ class FourierEmbedding(torch.nn.Module):
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x
 
-# without x0 condition
+
+# ----------------------------------------------------------------------------- models
 class TimeVaryingOU(torch.nn.Module):
-    # x0-free baseline: sigma, c2 as a function of (lead, ch, y) only
-    # embedding t with positional embedding
-    # embedding x / y with fourier embedding (x_dim / y_dim channels; 0 = ignore that coordinate)
-    # embedding ch with nn.Embedding(2, d)
-    # n_hidden MLP layers with SiLU, softplus heads
-    # tuned: 1 hidden layer, no x, one y mode (val nll 0.1157 vs 0.1160 for the 3-layer xy_dim=8 model)
-    def __init__(self, emb_dim=64, hidden_dim=256, n_hidden=1, x_dim=0, y_dim=2, out_dim=2):
+    """x0-free model: sigma, c2 as a function of (lead, ch, y) only.
+
+    lead -> positional embedding,
+    ch -> nn.Embedding(2, d), 
+    x / y -> Fourier embedding
+    n_hidden MLP layers with SiLU, softplus heads.
+
+    The MLP is evaluated on the factored grid: K leads x C channels x (H if x_dim else 1) x W.
+    fit_sigma=True  -> forward returns (sigma, c2), each (1, K, C, H|1, W)
+    fit_sigma=False -> forward returns c2 only
+    out_dim overrides the head size when the MLP is used as a feature network (X0ConditionedOU)."""
+    def __init__(self, emb_dim=64, hidden_dim=256, n_hidden=1, x_dim=0, y_dim=2, fit_sigma=True,
+                 out_dim=None, C=2, H=64, W=64):
         super().__init__()
+        self.fit_sigma = fit_sigma
+        self.x_dim = x_dim
         self.t_emb = PositionalEmbedding(emb_dim)
         self.x_emb = FourierEmbedding(x_dim)
         self.y_emb = FourierEmbedding(y_dim)
-        self.ch_emb = torch.nn.Embedding(2, emb_dim)
+        self.ch_emb = torch.nn.Embedding(C, emb_dim)
+        # coordinate axes of the box (not saved in the state dict)
+        self.register_buffer('chs', torch.arange(C, dtype=torch.float32), persistent=False)   # float: meshgrid needs one dtype
+        self.register_buffer('xs', torch.arange(H, dtype=torch.float32), persistent=False)
+        self.register_buffer('ys', torch.arange(W, dtype=torch.float32), persistent=False)
 
-        in_dim = emb_dim + x_dim + y_dim + emb_dim 
+        in_dim = emb_dim + x_dim + y_dim + emb_dim
         dims = [in_dim] + [hidden_dim] * n_hidden
         self.layers = torch.nn.ModuleList(
             torch.nn.Linear(d_in, d_out) for d_in, d_out in zip(dims[:-1], dims[1:])
         )
-        self.out = torch.nn.Linear(hidden_dim, out_dim)
+        n_heads = 2 if fit_sigma else 1
+        self.out = torch.nn.Linear(hidden_dim, out_dim or n_heads)
         torch.nn.init.zeros_(self.out.weight)
         torch.nn.init.zeros_(self.out.bias)
-        self.out.bias.data[:2] = torch.tensor([0.541, 0.07])   # sigma = 1, alpha ≈ 0.7
+        # start at sigma = 1 (softplus(0.541) = 1), c2 = softplus(0.07) ~ 0.73 -> alpha ~ 0.7
+        self.out.bias.data[:n_heads] = torch.tensor([0.541, 0.07] if fit_sigma else [0.07])
 
-    def features(self, t, x, y, ch):
-        h = torch.cat([self.t_emb(t), self.x_emb(x), self.y_emb(y), self.ch_emb(ch)], dim=1)
+    def features(self, lead):
+        """lead: (K,) -> MLP output (K, C, H|1, W, out_dim). Each (lead, ch, x, y) is evaluated once."""
+        xs = self.xs if self.x_dim else self.xs[:1]                     # x ignored -> a single x
+        t, c, x, y = torch.meshgrid(lead, self.chs, xs, self.ys, indexing='ij')
+        h = torch.cat([self.t_emb(t.reshape(-1)), self.x_emb(x.reshape(-1)),
+                       self.y_emb(y.reshape(-1)), self.ch_emb(c.reshape(-1).long())], dim=1)
         for layer in self.layers:
             h = silu(layer(h))
-        return self.out(h)                                          # (P, out_dim)
+        return self.out(h).view(*t.shape, -1)
 
-    def forward(self, t, x, y, ch, x0=None):                        # x0 is accepted and ignored
-        h = self.features(t, x, y, ch)
-        sigma = torch.nn.functional.softplus(h[:, 0]) + 1e-6
-        c2 = torch.nn.functional.softplus(h[:, 1]) + 1e-6
-        return sigma, c2
+    def forward(self, lead, x0=None):                                   # x0 is accepted and ignored
+        h = softplus(self.features(lead)[None]) + 1e-6                  # (1, K, C, H|1, W, n_heads)
+        return (h[..., 0], h[..., 1]) if self.fit_sigma else h[..., 0]
 
-# x0 encoding
+
 class HandFeatures(torch.nn.Module):
     """Fixed per-pixel descriptors of x0: value, gradient magnitude and Laplacian of each
     channel (periodic central finite differences), standardised with train-set statistics.
@@ -156,12 +168,12 @@ class HandFeatures(torch.nn.Module):
 
 
 class CNNFeatures(torch.nn.Module):
-    """Fully convolutional net on [x0, HandFeatures(x0)] -> (b, r, 64, 64) learned per-pixel features.
+    """Fully convolutional net on x0 (optionally plus HandFeatures(x0)) -> (b, r, 64, 64) learned per-pixel features.
     3x3 convolutions with circular padding (periodic box) and increasing dilation, so the
     receptive field grows to ~63 px (the whole box) with dilations [1, 2, 4, 8, 16, 1]. Translation-equivariant:
     it reacts to the flow pattern around a pixel, never to the pixel's absolute position.
-    Tuned: whole-box context, dropout 0.1, with hand features -> val nll 0.066 (harness 0.0669, notebook run 0.0658)."""
-    def __init__(self, r=32, width=32, dilations=(1, 2, 4, 8, 16, 1), hand=True, dropout=0.1):
+    Tuned (sigma + c2): whole-box context, dropout 0.1 -> val nll 0.066 with hand features, 0.067 without."""
+    def __init__(self, r=32, width=32, dilations=(1, 2, 4, 8, 16, 1), hand=False, dropout=0.1):
         super().__init__()
         self.hand = HandFeatures() if hand else None
         c = 2 + (self.hand.r if hand else 0)
@@ -181,51 +193,75 @@ class CNNFeatures(torch.nn.Module):
 
 
 class X0ConditionedOU(torch.nn.Module):
-    """sigma, c2 depend on (lead, ch, y) AND on the initial state x0.
 
-    Bilinear readout (a FiLM / hypernetwork-style conditional linear layer):
-        pre-softplus h[b, p, o] = base[p, o] + sum_r A[p, o, r] * F[b, r, pix(p)]
-    where base and A come from the (lead, ch, y) MLP (TimeVaryingOU with 2 + 2r outputs) and
-    F = CNNFeatures(x0). A is zero-initialised, so training starts exactly at the x0-free model.
-    Returns sigma, c2 of shape (b, P) -> the per-pixel loss broadcasts over trajectories."""
-    def __init__(self, feat=None, emb_dim=64, hidden_dim=256, n_hidden=1, x_dim=0, y_dim=2):
+    def __init__(self, feat=None, emb_dim=64, hidden_dim=256, n_hidden=1, x_dim=0, y_dim=2, fit_sigma=True):
         super().__init__()
         self.feat = feat if feat is not None else CNNFeatures()
         self.r = self.feat.r
-        self.point = TimeVaryingOU(emb_dim, hidden_dim, n_hidden, x_dim, y_dim, out_dim=2 + 2 * self.r)
+        self.fit_sigma = fit_sigma
+        self.n_heads = 2 if fit_sigma else 1
+        self.point = TimeVaryingOU(emb_dim, hidden_dim, n_hidden, x_dim, y_dim, fit_sigma=fit_sigma,
+                                   out_dim=self.n_heads * (1 + self.r))
 
-    def forward(self, t, x, y, ch, x0):
-        o = self.point.features(t, x, y, ch)                         # (P, 2 + 2r)
-        base, A = o[:, :2], o[:, 2:].view(-1, 2, self.r)
-        Fm = self.feat(x0).flatten(2)                                # (b, r, 64*64)
-        Fp = Fm[:, :, x.long() * 64 + y.long()]                      # (b, r, P)  gather the pixel of every point
-        h = base[None] + torch.einsum('por,brp->bpo', A, Fp)        # (b, P, 2)
-        sigma = torch.nn.functional.softplus(h[..., 0]) + 1e-6
-        c2 = torch.nn.functional.softplus(h[..., 1]) + 1e-6
-        return sigma, c2
+    def forward(self, lead, x0):
+        o = self.point.features(lead)                                   # (K, C, H|1, W, n + n*r)
+        n = self.n_heads
+        base, A = o[..., :n], o[..., n:].unflatten(-1, (n, self.r))     # (K,C,X,W,n), (K,C,X,W,n,r)
+        F = self.feat(x0)                                               # (b, r, H, W)
+        if A.shape[2] == 1:                                             # x ignored: A is the same for every x
+            h = base[None] + torch.einsum('kcwor,brhw->bkchwo', A[:, :, 0], F)
+        else:
+            h = base[None] + torch.einsum('kchwor,brhw->bkchwo', A, F)
+        h = softplus(h) + 1e-6                                          # (b, K, C, H, W, n)
+        return (h[..., 0], h[..., 1]) if self.fit_sigma else h[..., 0]
 
-# with learning both sigma and c2
-def sigma_c2_mle(batch, model, device):
-    *tensors, x0 = batch
-    lead, ch, x, y, z_prev, z_next = (b.to(device) for b in tensors)
-    x0 = None if x0 is None else x0.to(device)      # None for the x0-free dataset
-    sigma_next, c2 = model(lead, x, y, ch, x0)      # sigma at lead k, c^2 on interval [k-1, k]
-    sigma_prev, _ = model(lead - 1, x, y, ch, x0)   # sigma at lead k-1
+
+# ----------------------------------------------------------------------------- losses
+def sigma_c2_mle(batch, model):
+    """Learn sigma and c2. The model is called once on leads 1..L (one CNN pass, one dropout mask),
+    then sliced: sigma at lead k-1 and k, c2 on the interval [k-1, k]."""
+    lead, z_prev, z_next, x0 = batch                                    # z: (b, K, C, H, W), leads 2..L
+    sigma, c2 = model(torch.cat([lead[:1] - 1, lead]), x0)              # leads 1..L
+    sigma_prev, sigma_next, c2 = sigma[:, :-1], sigma[:, 1:], c2[:, 1:]
     alpha = torch.exp(-0.5 * c2)                    # dt = 1 h
     one_m_a2 = -torch.expm1(-c2)                    # 1 - alpha^2, stable as alpha -> 1
-    xi_prev, xi_next = z_prev / sigma_prev, z_next / sigma_next   # (n_traj, P)
+    xi_prev, xi_next = z_prev / sigma_prev, z_next / sigma_next
     loss = 0.5 * (torch.log(sigma_next**2) + torch.log(one_m_a2) + (xi_next - alpha * xi_prev)**2 / one_m_a2)
-    first = lead == 2                               # transition 1 -> 2 also carries the lead-1 marginal
+    first = (lead == 2).float().view(1, -1, 1, 1, 1)   # transition 1 -> 2 also carries the lead-1 marginal
     loss = loss + first * 0.5 * (torch.log(sigma_prev**2) + xi_prev**2)
     return loss.mean(), loss.numel()
 
-# only c2
+
+def c2_mle(batch, model):
+    """Learn c2 only: z is treated as unit variance, so only alpha = exp(-c2/2) is fitted."""
+    lead, z_prev, z_next, x0 = batch
+    c2 = model(lead, x0)                            # c^2 on interval [k-1, k], broadcasts to (b, K, C, H, W)
+    alpha = torch.exp(-0.5 * c2)                    # dt = 1 h
+    one_m_a2 = -torch.expm1(-c2)                    # 1 - alpha^2
+    loss = 0.5 * (torch.log(one_m_a2) + (z_next - alpha * z_prev)**2 / one_m_a2)
+    return loss.mean(), loss.numel()
+
+def c2_mle_without_x0(batch, model):
+    """Learn c2 only: z is treated as unit variance, so only alpha = exp(-c2/2) is fitted."""
+    lead, z_prev, z_next, _ = batch
+    c2 = model(lead)                            # c^2 on interval [k-1, k], broadcasts to (b, K, C, H, W)
+    alpha = torch.exp(-0.5 * c2)                    # dt = 1 h
+    one_m_a2 = -torch.expm1(-c2)                    # 1 - alpha^2
+    loss = 0.5 * (torch.log(one_m_a2) + (z_next - alpha * z_prev)**2 / one_m_a2)
+    return loss.mean(), loss.numel()
 
 
+# ----------------------------------------------------------------------------- training
+def train(model, train_ds, val_ds, loss_fn, epochs=150, lr=1e-3, weight_decay=1e-4, cosine=True,
+          print_every=10, patience=None, min_delta=1e-5):
+    """AdamW + cosine learning-rate schedule stepped every batch, as tuned in time-varying.ipynb.
+    One epoch = n_traj / traj_per_batch optimizer steps (15 for 120 train trajectories), hence many epochs.
 
-def sigma_c2_train(model, train_ds, val_ds, device, epochs=150, lr=3e-4, weight_decay=1e-4, cosine=True, print_every=10):
-    # dt is the gap between consecutive leads in hours, so c is in physical units
-    # one epoch = n_traj / traj_per_batch optimizer steps (15 for the train split), hence the many epochs
+    The model is left at its LAST epoch. history['best_state'] holds a copy of the best-val state.
+    Optional early stop: patience = epochs without val improving by more than min_delta (None = off).
+    Note that val nll moves ~5e-4 between epochs and the cosine schedule plans for all `epochs`,
+    so early stopping with a small patience cuts the low-lr phase."""
+    device = train_ds.Z.device
     model = model.to(device)
     if getattr(getattr(model, 'feat', None), 'hand', None) is not None:
         model.feat.hand.fit(train_ds.X0)                         # standardise hand features with train stats
@@ -233,13 +269,14 @@ def sigma_c2_train(model, train_ds, val_ds, device, epochs=150, lr=3e-4, weight_
     steps_per_epoch = math.ceil(train_ds.n / train_ds.traj_per_batch)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs * steps_per_epoch) if cosine else None
 
-    history = {'train': [], 'val': []}
+    history = {'train': [], 'val': [], 'lr': []}
     best = (float('inf'), None)
+    wait = 0                                                     # epochs since the last val improvement
     for epoch in range(epochs):
         model.train()
         total = 0.0
         for batch in train_ds.iterate_batches():
-            loss, n = sigma_c2_mle(batch, model, device)
+            loss, n = loss_fn(batch, model)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -247,19 +284,67 @@ def sigma_c2_train(model, train_ds, val_ds, device, epochs=150, lr=3e-4, weight_
                 scheduler.step()
             total += loss.item() * n
         history['train'].append(total / train_ds.size)
+        history['lr'].append(optimizer.param_groups[0]['lr'])
 
         model.eval()
         total = 0.0
         with torch.no_grad():
             for batch in val_ds.iterate_batches():
-                loss, n = sigma_c2_mle(batch, model, device)
+                loss, n = loss_fn(batch, model)
                 total += loss.item() * n
         history['val'].append(total / val_ds.size)
-        if history['val'][-1] < best[0]:
+        if history['val'][-1] < best[0] - min_delta:
             best = (history['val'][-1], {k: v.detach().clone() for k, v in model.state_dict().items()})
+            wait = 0
+        else:
+            wait += 1
 
         if (epoch + 1) % print_every == 0 or epoch == 0 or epoch == epochs - 1:
             print(f"epoch {epoch + 1}/{epochs}  train nll {history['train'][-1]:.4f}  val nll {history['val'][-1]:.4f}")
+        if patience is not None and wait >= patience:
+            print(f"early stop at epoch {epoch + 1}: no val improvement for {patience} epochs")
+            break
     print(f"best val nll {best[0]:.5f} at epoch {int(np.argmin(history['val'])) + 1}, last val nll {history['val'][-1]:.5f}")
     history['best_state'] = best[1]
     return history
+
+
+def plot_history(history, path, title=''):
+    """Train / val nll per epoch (top) and learning rate (bottom), saved to `path`."""
+    fig, (ax, ax_lr) = plt.subplots(2, 1, figsize=(7, 6), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    epochs = np.arange(1, len(history['train']) + 1)
+    ax.plot(epochs, history['train'], label='train')
+    ax.plot(epochs, history['val'], label='val')
+    best = int(np.argmin(history['val']))
+    ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
+               label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
+    ax.set_ylabel('nll per loss term')
+    ax.set_title(title)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    ax_lr.plot(epochs, history['lr'], color='gray')
+    ax_lr.set_xlabel('epoch')
+    ax_lr.set_ylabel('lr')
+    ax_lr.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def plot_loss(history, path, title=''):
+    """Train / val nll per epoch, saved to `path`."""
+    fig, ax = plt.subplots(figsize=(7, 4))
+    epochs = np.arange(1, len(history['train']) + 1)
+    ax.plot(epochs, history['train'], label='train')
+    ax.plot(epochs, history['val'], label='val')
+    best = int(np.argmin(history['val']))
+    ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
+               label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('nll per loss term')
+    ax.set_title(title)
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)

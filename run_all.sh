@@ -183,7 +183,10 @@ IV_RATE=${IV_RATE:-185}
 # which does not exist, and comparison arms are out of scope. The run generates
 # data and metrics.npz only; the figure is a separate opt-in step:
 #     PYTHONPATH=. .venv/bin/python Analysis/round_trip.py --plot
-RT_ENABLE=${RT_ENABLE:-1}
+# CANCELLED. The round trip is off; direct forecasting took its place and runs
+# from forecasting.sh. Set RT_ENABLE=1 to pick this back up -- both halves
+# resume by file, so the 1 euler window already on disk is still credited.
+RT_ENABLE=${RT_ENABLE:-0}
 RT_SPLIT=${RT_SPLIT:-test}
 RT_TRAJ=${RT_TRAJ:-20}        # windows per arm; raise to extend
 RT_ANCHORS=${RT_ANCHORS:-1}   # 1 = every window from a different trajectory
@@ -497,12 +500,17 @@ run_stage() {
     fi
 }
 
-# Training reads data/train and data/val. A git worktree has neither (only the
-# main checkout materialises them), so check before paying the compile warmup.
+# Catch a run started from a git worktree, which materialises no data at all,
+# before paying the model-load warmup.
+#
+# data/train is NOT checked. It is empty in the main checkout, and nothing that
+# runs now reads it: the round-trip stages read data/test, and build_traj_index
+# simply contributes no ids from a split whose folder is empty. Put it back in
+# the list only if the train stage is re-enabled.
 check_workspace() {
     local missing=''
     local d
-    for d in data/train data/val; do
+    for d in data/val; do
         if [[ ! -d "$ROOT/$d" ]] || [[ -z "$(ls -A "$ROOT/$d" 2>/dev/null)" ]]; then
             missing+=" $d"
         fi
@@ -515,7 +523,7 @@ check_workspace() {
         log "       run it there:  cd $MAIN_ROOT && ./run_all.sh start"
     fi
     set_status failed 0 workspace
-    notify failed "Wrong checkout: $ROOT has no data/train or data/val."
+    notify failed "Wrong checkout: $ROOT is missing$missing."
     exit 1
 }
 

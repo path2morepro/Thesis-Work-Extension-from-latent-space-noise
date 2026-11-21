@@ -1,0 +1,187 @@
+{
+  "alpha": 1.0,
+  "alpha_note": "fixed: the SAME latent at every lead",
+  "anchors": {
+    "1350": [
+      29
+    ],
+    "1351": [
+      8
+    ],
+    "1352": [
+      11
+    ],
+    "1353": [
+      27
+    ],
+    "1354": [
+      61
+    ],
+    "1355": [
+      20
+    ],
+    "1356": [
+      37
+    ],
+    "1357": [
+      13
+    ],
+    "1358": [
+      25
+    ],
+    "1359": [
+      52
+    ],
+    "1360": [
+      11
+    ],
+    "1361": [
+      59
+    ],
+    "1362": [
+      9
+    ],
+    "1363": [
+      63
+    ],
+    "1364": [
+      43
+    ],
+    "1365": [
+      57
+    ],
+    "1366": [
+      52
+    ],
+    "1367": [
+      7
+    ],
+    "1368": [
+      52
+    ],
+    "1369": [
+      9
+    ],
+    "1370": [
+      61
+    ],
+    "1371": [
+      46
+    ],
+    "1372": [
+      20
+    ],
+    "1373": [
+      35
+    ],
+    "1374": [
+      63
+    ],
+    "1375": [
+      40
+    ],
+    "1376": [
+      27
+    ],
+    "1377": [
+      75
+    ],
+    "1378": [
+      65
+    ],
+    "1379": [
+      10
+    ],
+    "1380": [
+      2
+    ],
+    "1381": [
+      6
+    ],
+    "1382": [
+      35
+    ],
+    "1383": [
+      14
+    ],
+    "1384": [
+      49
+    ],
+    "1385": [
+      53
+    ],
+    "1386": [
+      27
+    ],
+    "1387": [
+      36
+    ],
+    "1388": [
+      63
+    ],
+    "1389": [
+      51
+    ],
+    "1390": [
+      72
+    ],
+    "1391": [
+      16
+    ],
+    "1392": [
+      69
+    ],
+    "1393": [
+      36
+    ],
+    "1394": [
+      38
+    ],
+    "1395": [
+      52
+    ],
+    "1396": [
+      59
+    ],
+    "1397": [
+      1
+    ],
+    "1398": [
+      42
+    ],
+    "1399": [
+      5
+    ]
+  },
+  "anchors_per_traj": 1,
+  "created": "2026-11-15T11:55:40+0100",
+  "device": "cuda",
+  "elapsed_seconds": 1.0,
+  "ens": 10,
+  "integrator": "euler",
+  "kind": "direct forecast, no arci: each lead its own map from one anchor",
+  "latent": {
+    "alpha": 1.0,
+    "kind": "const_alpha"
+  },
+  "metric_files": [
+    "metrics.npz",
+    "metrics.png",
+    "temporal_difference.npz"
+  ],
+  "micro_ens": 5,
+  "model": {
+    "path": "/home/trace/Documents/Projects/Thesis/models/randomAnchor_n_24pred_formal_v2.pth",
+    "sha256": "1a48dd3b80bb6a6014ef05083d19870a754837ef51559ae6359a6c4cebaa3338"
+  },
+  "n_computed_this_run": 0,
+  "n_lead": 24,
+  "n_traj": 50,
+  "n_windows": 50,
+  "order": 1,
+  "seed": 0,
+  "split": "test",
+  "steps": 100,
+  "torch": "2.5.1+cu121",
+  "units": "normalised (field / NORM_STD), truth from /home/trace/Documents/Projects/Thesis/data/test"
+}
