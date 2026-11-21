@@ -9,8 +9,10 @@ __MACOSX/
 Visual/
 report/
 
-# run_all.sh bookkeeping
+
 logs/
 archive/
 .run_all.lock
 *.md
+*.sh
+ou_forecast.py
