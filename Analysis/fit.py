@@ -318,7 +318,7 @@ def plot_history(history, path, title=''):
     best = int(np.argmin(history['val']))
     ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
                label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
-    ax.set_ylabel('nll per loss term')
+    ax.set_ylabel('NLL per loss term')
     ax.set_title(title)
     ax.grid(alpha=0.3)
     ax.legend()
@@ -331,7 +331,7 @@ def plot_history(history, path, title=''):
     plt.close(fig)
 
 
-def plot_loss(history, path, title=''):
+def plot_loss(history, path):
     """Train / val nll per epoch, saved to `path`."""
     fig, ax = plt.subplots(figsize=(7, 4))
     epochs = np.arange(1, len(history['train']) + 1)
@@ -340,11 +340,10 @@ def plot_loss(history, path, title=''):
     best = int(np.argmin(history['val']))
     ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
                label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
-    ax.set_xlabel('epoch')
-    ax.set_ylabel('nll per loss term')
-    ax.set_title(title)
-    ax.grid(alpha=0.3)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Negative Likehood Function')
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=150)
-    plt.close(fig)
+
+    return fig, ax
