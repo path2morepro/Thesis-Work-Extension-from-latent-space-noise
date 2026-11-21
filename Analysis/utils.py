@@ -28,53 +28,40 @@ def load_invert(dir):
 
 def temporal_difference(x):
     '''
-    The temporal difference computed in CPRI appendix.
+    Temporal difference from the CRPI appendix: mean |x[t+1] - x[t]| for each
+    lag, averaged over trajectories, ensemble members and pixels.
 
-    This function can accept either truth data or predict data
+    x : numpy array or torch tensor, in the layout the forecast files are saved in
+        preds (N, L, ens, levels, H, W)
+        truth (N, L,      levels, H, W)
 
-    input:
-        if preds (N, ens, 24, levels, H, W)
-        if truths (N, 24, levels, H, W)
-
-        and they are numpy
-
-    output: 
-        diff (24, )
+    returns (L-1,): entry k is the difference between lead k and lead k+1 (lag k+1).
     '''
-
     if isinstance(x, torch.Tensor):
         x = x.numpy()
-    if len(x.shape) == 6:
-        N, ens, L,  _, _, _= x.shape
-        x = x.reshape(N, ens, L, -1)
-        diff = np.mean(np.abs(x[:, :, 1:, ...] - x[:, :, :-1, ...]), axis=(0, 1, 3))
-    elif len(x.shape) == 5:
-        N, L, _, _, _ = x.shape
-        x = x.reshape(N, L, -1)
-        # for each N perform the offset substraction
-        diff = np.mean(np.abs(x[:, 1:, ...] - x[:, :-1, ...]), axis=(0, 2))
-    else:
-        print(x.shape)
+    if x.ndim == 5:                      # truth: one "member"
+        x = x[:, :, None]
+    if x.ndim != 6:
+        raise ValueError(f'expected truth (N, L, C, H, W) or preds (N, L, ens, C, H, W), got {x.shape}')
 
-    return diff
+    N, L, ens = x.shape[:3]
+    x = x.reshape(N, L, ens, -1)
+    return np.abs(np.diff(x, axis=1)).mean(axis=(0, 2, 3))
 
-def plot_temporal_difference(diff):
+def plot_temporal_difference(diffs, styles=None):
     '''
-    the diff here cannot be used directly after temporal difference
-    diff should be a dict filled with all the difference you want to plot
-    the key would be the label and the value would be diff (24, )
-    so in this function, it would plot everything in the dict    
+    Plot several temporal-difference curves on one axis.
 
-    diff: (n_diff, 24)
+    diffs  : dict label -> (L-1,) array from temporal_difference
+    styles : optional dict label -> extra ax.plot kwargs (e.g. a dashed truth line)
     '''
-
+    styles = styles or {}
     fig, ax = plt.subplots(figsize=(7, 4))
-    for label, values in diff.items():
-        values = np.asarray(values)
-        x = np.arange(len(values)) 
-        ax.plot(x, values, marker="o", markersize=3, label=label)
-    ax.set_xlabel("lag t")
-    ax.set_ylabel("difference")
+    for label, values in diffs.items():
+        lags = np.arange(1, len(values) + 1)
+        ax.plot(lags, values, label=label, **({'marker': 'o', 'markersize': 3} | styles.get(label, {})))
+    ax.set_xlabel('lead time t')
+    ax.set_ylabel(r'$\Delta x$')
     ax.legend()
     ax.grid(alpha=0.3)
     return fig, ax
