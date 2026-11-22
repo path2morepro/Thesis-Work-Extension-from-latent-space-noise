@@ -60,9 +60,9 @@ def plot_temporal_difference(diffs, styles=None):
     for label, values in diffs.items():
         lags = np.arange(1, len(values) + 1)
         ax.plot(lags, values, label=label, **({'marker': 'o', 'markersize': 3} | styles.get(label, {})))
-    ax.set_xlabel('lead time t')
+    ax.set_xlabel('Lead time')
     ax.set_ylabel(r'$\Delta x$')
-    ax.legend()
+    ax.legend(fontsize='small')
     ax.grid(alpha=0.3)
     return fig, ax
 

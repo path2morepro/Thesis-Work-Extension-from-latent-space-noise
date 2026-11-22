@@ -2,11 +2,6 @@
 
 Separate entry point so Condition_model.forecasting's own CLI (the ARCI
 forecast over whole trajectories) stays exactly as it is.
-
-No ARCI. Every lead is its own map Phi(x0, tau) from the SAME anchor, so lead
-24 is not built from lead 23 and nothing is re-anchored. The only thing that
-differs between the two arms is the latent chain:
-
     uncorrelated   alpha = 0.0   z_t = eps_t      an independent latent per lead
     fixed          alpha = 1.0   z_t = z_{t-1}    the SAME latent at every lead
 

@@ -15,11 +15,10 @@ train_ds = TrajDataset(invert_euler960, split='train', device=device, traj_per_b
 val_ds = TrajDataset(invert_euler960, split='val', device=device, traj_per_batch=8, condition=False)   # same data as train
 # print(val_ds.n, 'trajectories,', val_ds.size, 'loss terms')
 
-
 torch.manual_seed(0)
 model = TimeVaryingOU(emb_dim=64, hidden_dim=256, n_hidden=1, x_dim=0, y_dim=4, fit_sigma=False)
 # print(sum(p.numel() for p in model.parameters()), 'parameters')
-history = train(model, train_ds, val_ds, c2_mle_without_x0, epochs=50, lr=1e-3, weight_decay=1e-4,
+history = train(model, train_ds, val_ds, c2_mle_without_x0, epochs=100, lr=1e-3, weight_decay=1e-4,
                 cosine=False, patience=20)
 plot_loss(history, result_path / 'c2_euler_withoutx0.png')
 torch.save(history['best_state'], model_save_path / "c2_euler_withoutx0.pt")      # best-val state; use model.state_dict() for the last epoch

@@ -289,19 +289,20 @@ def plot_metrics(metrics, out_path=None):
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
     axes[0].plot(lead_times[valid], metrics['rmse'][valid], color='steelblue')
-    axes[0].set_title('RMSE'); axes[0].set_xlabel('Lead time (h)'); axes[0].grid(alpha=0.3)
+    axes[0].set_title('RMSE'); axes[0].grid(alpha=0.3)
 
     axes[1].plot(lead_times[valid], metrics['crps'][valid], color='darkorange')
-    axes[1].set_title('CRPS'); axes[1].set_xlabel('Lead time (h)'); axes[1].grid(alpha=0.3)
+    axes[1].set_title('CRPS'); axes[1].grid(alpha=0.3)
 
     axes[2].plot(lead_times[valid], metrics['ssr'][valid], color='seagreen')
     axes[2].axhline(1.0, color='red', linestyle='--', lw=1, label='ideal')
-    axes[2].set_title('SSR'); axes[2].set_xlabel('Lead time (h)')
-    axes[2].legend(); axes[2].grid(alpha=0.3)
+    axes[2].set_title('SSR'); 
+    axes[2].legend()
+    axes[2].grid(alpha=0.3)
 
-    plt.suptitle(f'Metrics over lead time — {int(counts[0])} samples', fontsize=11)
+    fig.supxlabel('Lead time')
     plt.tight_layout()
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.savefig(out_path, dpi=600, bbox_inches='tight')
     print(f'Saved metrics plot -> {out_path}')
     plt.close(fig)
 

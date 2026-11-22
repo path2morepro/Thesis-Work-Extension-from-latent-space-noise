@@ -270,7 +270,7 @@ def train(model, train_ds, val_ds, loss_fn, epochs=150, lr=1e-3, weight_decay=1e
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs * steps_per_epoch) if cosine else None
 
     history = {'train': [], 'val': [], 'lr': []}
-    best = (float('inf'), None)
+    best = (float('inf'), None, -1)                            # (val, state, epoch index) under the min_delta rule
     wait = 0                                                     # epochs since the last val improvement
     for epoch in range(epochs):
         model.train()
@@ -294,7 +294,7 @@ def train(model, train_ds, val_ds, loss_fn, epochs=150, lr=1e-3, weight_decay=1e
                 total += loss.item() * n
         history['val'].append(total / val_ds.size)
         if history['val'][-1] < best[0] - min_delta:
-            best = (history['val'][-1], {k: v.detach().clone() for k, v in model.state_dict().items()})
+            best = (history['val'][-1], {k: v.detach().clone() for k, v in model.state_dict().items()}, epoch)
             wait = 0
         else:
             wait += 1
@@ -304,8 +304,9 @@ def train(model, train_ds, val_ds, loss_fn, epochs=150, lr=1e-3, weight_decay=1e
         if patience is not None and wait >= patience:
             print(f"early stop at epoch {epoch + 1}: no val improvement for {patience} epochs")
             break
-    print(f"best val nll {best[0]:.5f} at epoch {int(np.argmin(history['val'])) + 1}, last val nll {history['val'][-1]:.5f}")
+    print(f"best val nll {best[0]:.5f} at epoch {best[2] + 1}, last val nll {history['val'][-1]:.5f}")
     history['best_state'] = best[1]
+    history['best_epoch'] = best[2]                              # 0-based; the epoch best_state comes from
     return history
 
 
@@ -315,7 +316,7 @@ def plot_history(history, path, title=''):
     epochs = np.arange(1, len(history['train']) + 1)
     ax.plot(epochs, history['train'], label='train')
     ax.plot(epochs, history['val'], label='val')
-    best = int(np.argmin(history['val']))
+    best = history.get('best_epoch', int(np.argmin(history['val'])))   # argmin only for old histories
     ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
                label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
     ax.set_ylabel('NLL per loss term')
@@ -337,7 +338,7 @@ def plot_loss(history, path):
     epochs = np.arange(1, len(history['train']) + 1)
     ax.plot(epochs, history['train'], label='train')
     ax.plot(epochs, history['val'], label='val')
-    best = int(np.argmin(history['val']))
+    best = history.get('best_epoch', int(np.argmin(history['val'])))   # argmin only for old histories
     ax.scatter(epochs[best], history['val'][best], color='tab:red', zorder=3,
                label=f"best val {history['val'][best]:.4f} (epoch {best + 1})")
     ax.set_xlabel('Epoch')
