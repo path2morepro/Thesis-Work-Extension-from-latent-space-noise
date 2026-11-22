@@ -247,17 +247,21 @@ def plot_rejection_ratio(ratio_ss, ratio_z, ratio_chi2, ds='euler'):
     top = max(ratio_ss.max(), ratio_z.max(), ratio_chi2.max()) or 1e-3
     ss_color, z_color, chi2_color = '#2a78d6', '#eb6834', '#1baf7a'
 
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(leads, ratio_ss, color=ss_color, marker='o', ms=4, lw=1.5, label='Shapiro-Wilk')
     ax.plot(leads, ratio_z, color=z_color, marker='s', ms=4, lw=1.5, label='z-test')
     ax.plot(leads, ratio_chi2, color=chi2_color, marker='^', ms=4, lw=1.5, label='chi-square')
-    ax.set_xlim(-0.5, L + 0.5)
+    # one by one until 10
+    def fwd(x): return np.where(x <= 14, x, 14 + (x - 14) / 5)
+    def inv(y): return np.where(y <= 14, y, 14 + (y - 14) * 5)
+
+    ax.set_xscale('function', functions=(fwd, inv))
+    ax.set_xticks(list(range(1, L + 1, 5)))
     ax.set_ylim(-0.03 * top, 1.15 * top)
-    ax.set_xlabel('lead time')
-    ax.set_ylabel('rejection ratio after Benjamini-Hochberg procedure')
-    ax.set_title('Rejection ratio per lead time', loc='left')
+    ax.set_xlabel('Lead time')
+    ax.set_ylabel('Rejection ratio')
     ax.grid(alpha=0.3)
-    ax.legend(loc='lower right', bbox_to_anchor=(1, 1), ncol=3, frameon=False)
+    ax.legend(loc='upper right', ncol=3, frameon=False)    
     fig.tight_layout()
 
     # Lead 1 labels extend left and lead 2 labels right, so the two columns can't touch
@@ -286,7 +290,7 @@ def plot_rejection_ratio(ratio_ss, ratio_z, ratio_chi2, ds='euler'):
             for label in labels:
                 label.xyann = (label.xyann[0], label.xyann[1] + 4)
 
-    fig.savefig(f"{result_dir(ds)}/rejection_ratio.png", dpi=300, bbox_inches='tight')
+    fig.savefig(f"{result_dir(ds)}/rejection_ratio_{ds}.png", dpi=600, bbox_inches='tight')
     plt.close(fig)
 
 def pixel_level_test(Z, ds='euler'):
@@ -338,13 +342,12 @@ def p_histogram(p, title, flex_scale=False, save=False, fine_bins=False, ds='eul
     n_bins = 40 if fine_bins else 20
     for lead, ax in enumerate(axes.ravel()[:L]):
         ax.hist(p[lead], bins=n_bins, range=(0, 1))
-        ax.set_title(f"lead time {lead + 1}")
+        ax.set_title(rf"$t_k={lead + 1}$", fontsize=9)
     for ax in axes.ravel()[L:]:
         ax.set_visible(False)
-    fig.suptitle(f"{title} test p-values per lead time")
     fig.tight_layout()
     if save:
-        fig.savefig(f"{result_dir(ds)}/{title}_p-values.png")
+        fig.savefig(f"{result_dir(ds)}/{title}_p-values.png", dpi=600)
     else:
         plt.show()
 
@@ -388,8 +391,7 @@ def plot_global_parameters(zf, ref, save=False, ds='euler'):
     ax.fill_between(leads, ref_mean_m_lo, ref_mean_m_hi, color="C1", alpha=0.3)
     ax.axhline(0, color="k", ls="--", lw=0.8)
     ax.set_xlim(1, L)
-    ax.set_xlabel("lead time")
-    ax.set_ylabel("spatial mean")
+    ax.set_ylabel("Mean")
     ax.set_title("Mean over lead time (95% CI)")
     ax.legend()
     ax.grid(alpha=0.3)
@@ -402,15 +404,14 @@ def plot_global_parameters(zf, ref, save=False, ds='euler'):
     ax.fill_between(leads, ref_var_m_lo, ref_var_m_hi, color="C1", alpha=0.3)
     ax.axhline(1, color="k", ls="--", lw=0.8)
     ax.set_xlim(1, L)
-    ax.set_xlabel("lead time")
-    ax.set_ylabel("variance")
+    ax.set_ylabel("Variance")
     ax.set_title("Variance over lead time (95% CI)")
     ax.legend()
     ax.grid(alpha=0.3)
-
+    fig.supxlabel('Lead time')
     fig.tight_layout()
     if save:
-        fig.savefig(f"{result_dir(ds)}/Global_Parameters.png")
+        fig.savefig(f"{result_dir(ds)}/Global_Parameters.png", dpi=600)
     else:
         plt.show()
 
@@ -459,14 +460,14 @@ def power_spectrum(Z, n_std=1.96, save=False, ds='euler'):
                          p_mean[l] + n_std * p_se[l],
                          color='tab:blue', alpha=0.2)
         ax.axhline(1, color='gray', linestyle='--', linewidth=1, label='reference')
-        ax.set_title(f'lead time {l+1}', fontsize=9)
+        ax.set_title(rf'$t_k={l+1}$ ', fontsize=9)
         ax.grid(alpha=0.3)
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', ncol=2)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     if save:
-        fig.savefig(f"{result_dir(ds)}/Pixels_Cov.png")
+        fig.savefig(f"{result_dir(ds)}/Pixels_Cov.png", dpi=600)
     else:
         plt.show()
 

@@ -284,20 +284,18 @@ def plot_metrics(metrics, out_path=None):
 
     lead_times = metrics['lead_times']
     counts     = metrics['counts']
-    valid      = counts > 0
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
-    axes[0].plot(lead_times[valid], metrics['rmse'][valid], color='steelblue')
+    axes[0].plot(lead_times, metrics['rmse'], color='steelblue')
     axes[0].set_title('RMSE'); axes[0].grid(alpha=0.3)
 
-    axes[1].plot(lead_times[valid], metrics['crps'][valid], color='darkorange')
+    axes[1].plot(lead_times, metrics['crps'], color='darkorange')
     axes[1].set_title('CRPS'); axes[1].grid(alpha=0.3)
 
-    axes[2].plot(lead_times[valid], metrics['ssr'][valid], color='seagreen')
-    axes[2].axhline(1.0, color='red', linestyle='--', lw=1, label='ideal')
+    axes[2].plot(lead_times, metrics['ssr'], color='seagreen')
+    axes[2].axhline(1.0, color='red', linestyle='--', lw=1)
     axes[2].set_title('SSR'); 
-    axes[2].legend()
     axes[2].grid(alpha=0.3)
 
     fig.supxlabel('Lead time')

@@ -1,31 +1,3 @@
-"""
-Generate inverted latents: run the ODE backwards from data to noise.
-
-For a trajectory and an anchor a, take the 24 true future frames
-traj[a+1 .. a+24] and invert each one back through the conditional flow,
-conditioned on x_a = traj[a] and its own lead time. The result is the latent
-that would reproduce that frame exactly if pushed forward again.
-
-Output: one file per (trajectory, anchor), shape (max_lead, C, H, W), under
-
-    data/invert/from_{split}/invert_traj{id}initial{a}.npy
-
-plus a copy of the FIRST anchor of every trajectory under
-
-    data/invert/distribution_check_{split}/
-
-That second set holds exactly one window per trajectory, so no two of its
-windows share a frame. Within `from_{split}` the 8 windows of a trajectory
-overlap heavily (anchors 30 and 35 share 19 of their 24 target frames), which
-is fine for pooling a correlation but wrong for any check that assumes
-independent draws -- hence the separate, genuinely independent set.
-
-Both directories also get a meta.json recording the model, seed and settings
-that produced them. Without it nothing on disk says which model the latents
-came from, which is how the previous generation of invert files (ids 400+,
-from the retired data_500traj layout) became unusable.
-"""
-
 import argparse
 import hashlib
 import json
