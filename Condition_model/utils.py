@@ -305,27 +305,5 @@ def plot_metrics(metrics, out_path=None):
     plt.close(fig)
 
 
-def compute_scalar_alpha(Z):
-    """
-    Lag-1 correlation corr(z_{t-1}, z_t).
-
-    Args:
-        Z: array (N, T, 2, 64, 64)
-
-    Returns:
-        alpha in [-1, 1]
-    """
-    Z = np.asarray(Z, dtype=np.float64).reshape(Z.shape[0], Z.shape[1], -1)
-    Zp, Zc = Z[:, :-1], Z[:, 1:]                   # (N, T-1, D)
-
-    cov = np.einsum("ntx,ntx->nt", Zp, Zc)
-    vp  = np.einsum("ntx,ntx->nt", Zp, Zp)
-    vc  = np.einsum("ntx,ntx->nt", Zc, Zc)
-
-    covs = np.sum(cov, axis=(0,1))
-    vps = np.sum(vp, axis=(0,1))
-    vcs = np.sum(vc, axis=(0,1))
-
-    return covs / np.sqrt(vps * vcs)              # scalar
 
 

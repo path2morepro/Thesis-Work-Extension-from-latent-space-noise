@@ -8,6 +8,7 @@ from natsort import natsorted
 from matplotlib.animation import FuncAnimation 
 import math
 from scipy import stats
+from itertools import cycle
 
 
 ROOT = Path(__file__).resolve().parent
@@ -48,23 +49,28 @@ def temporal_difference(x):
     x = x.reshape(N, L, ens, -1)
     return np.abs(np.diff(x, axis=1)).mean(axis=(0, 2, 3))
 
-def plot_temporal_difference(diffs, styles=None):
+def plot_temporal_difference(diffs, filename='overview'):
     '''
     Plot several temporal-difference curves on one axis.
 
     diffs  : dict label -> (L-1,) array from temporal_difference
     styles : optional dict label -> extra ax.plot kwargs (e.g. a dashed truth line)
     '''
-    styles = styles or {}
+    markers = cycle(['o', 's', '^', 'D', 'v', 'P', 'X', '*'])
     fig, ax = plt.subplots(figsize=(7, 4))
     for label, values in diffs.items():
-        lags = np.arange(1, len(values) + 1)
-        ax.plot(lags, values, label=label, **({'marker': 'o', 'markersize': 3} | styles.get(label, {})))
+        t = np.arange(1, len(values) + 1)
+        ax.plot(
+            t, values, label=label,
+            **({'marker': next(markers), 'markersize': 5, 'markevery': 3})
+        )    
     ax.set_xlabel('Lead time')
     ax.set_ylabel(r'$\Delta x$')
     ax.legend(fontsize='small')
     ax.grid(alpha=0.3)
-    return fig, ax
+    fig.savefig(ROOT / 'Result'  / f'{filename}.png', dpi=600, bbox_inches='tight')
+    plt.close(fig)
+
 
 def get_latents(latent_shape, alpha, device='cpu', z0=None):
     '''
@@ -290,7 +296,7 @@ def plot_rejection_ratio(ratio_ss, ratio_z, ratio_chi2, ds='euler'):
             for label in labels:
                 label.xyann = (label.xyann[0], label.xyann[1] + 4)
 
-    fig.savefig(f"{result_dir(ds)}/rejection_ratio_{ds}.png", dpi=600, bbox_inches='tight')
+    fig.savefig(f"{result_dir(ds)}/rejection_ratio.png", dpi=600, bbox_inches='tight')
     plt.close(fig)
 
 def pixel_level_test(Z, ds='euler'):
