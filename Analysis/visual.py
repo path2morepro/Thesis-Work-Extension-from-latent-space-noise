@@ -42,7 +42,7 @@ def visualize_frames(data, ts, name):
         ax.imshow(data[t, 0, ...], cmap='RdBu_r', vmin=-vmax, vmax=vmax, origin='lower')
         ax.set_axis_off()                      # no label, no title
         fig.savefig(visual_basepath / f'{name}_{t}.pdf',
-                    bbox_inches='tight', pad_inches=0)
+                    bbox_inches='tight', pad_inches=0, dpi=1200)
         plt.close(fig)
 
 visualize_frames(Z_sample, ts, 'latent')
